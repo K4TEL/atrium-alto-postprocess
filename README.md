@@ -1,7 +1,9 @@
 # ALTO XML files postprocessing
 
-## Setup
+From ALTO XML files to statistics tables, text classification, name entity recognition (NER), keyword extraction (KER), and CONLL-U files.
+Filtering out low-quality OCR text based on language identification and perplexity measures. 
 
+## Setup
 In a new virtual environment, while in the project directory, run:
 
     pip install -r requirements.txt
@@ -57,6 +59,7 @@ is [alto-tools](https://github.com/cneud/alto-tools) and you can check its sourc
 > The statistics table containing all pages from the collection is used as foundation for the further
 > processing steps.
 
+Example of such statistics table is illustrated in the [test_alto_stats.csv](test_alto_stats.csv) file.
 
 ## Text classification of ALTO document's content in per-line manner
 
@@ -122,6 +125,9 @@ Which will take some time to finish, while results are saved on each 25th page, 
 Tables covering the whole collection are saved next to the script, while raw text files and per-document 
 tabular results are recorded in `../PAGE-TXT/<file>` subdirectories and in `../PAGE-STAT` as separate CSV files named
 after the documents they describe.
+
+Examples of such output tables are illustrated in the [line_counts_test_alto_stats.csv](line_counts_test_alto_stats.csv) 
+and [pages_classified_test_alto_stats.csv](pages_classified_test_alto_stats.csv) files.
 
 ## Get the text contents of pages into the stats CSV
 
@@ -232,4 +238,6 @@ Columns of these tables are:
  - `score<N>` - the score of the N-th keyword extracted from the page/document
 
 The `N` value goes from 1 to the value of `--max-words` parameter (5 or 10 by default).
+
+The example of the per-document summary table is illustrated in the [documents_keywords.tsv](documents_keywords.tsv) file.
 
