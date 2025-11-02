@@ -88,8 +88,36 @@ To run the script:
 
 Which will take some time to finish, while results are saved on each 25th page, output tables are:
     
-- `line_counts_<input.csv>` - counts of lines per category for each page, plus most common language pair
-- `lpages_classified_<input.csv>` - detailed classification results for each line of each page, contains predicted model scores and initial text corrections
+- `line_counts_<input.csv>` - counts of lines per category for each page, columns:
+  - `file` - document identifier
+  - `page` - page number
+  - `textlines` - number of text lines on the ALTO page
+  - `illustrations` - number of illustrations on the ALTO page
+  - `graphics` - number of graphics on the ALTO page
+  - `strings` - number of strings on the ALTO page
+  - `path` - path to the ALTO XML file of the page
+  - `clear_lines` - number of lines classified as **Clear**
+  - `noisy_lines` - number of lines classified as **Noisy**
+  - `trash_lines` - number of lines classified as **Trash**
+  - `nontxt_lines` - number of lines classified as **Non-text**
+  - `empty_lines` - number of lines classified as **Empty**
+  - `rough_lines` - number of lines classified as **Rough**
+  - `short_lines` - number of lines classified as **Short**
+  - `languages` - most common language code pair among page lines (e.g., "eng-ces", "deu-other", "ces" etc.)
+  
+- `pages_classified_<input.csv>` - detailed classification results for each line of each page, columns: 
+  - `file` - document identifier
+  - `page` - page number
+  - `line` - line number on the ALTO page
+  - `line_text` - original text of the line from ALTO page
+  - `lang_code` - predicted ISO language code of the line ([list of all possible language labels predicted by FastText model)](https://github.com/facebookresearch/flores/tree/main/flores200#languages-in-flores-200)
+  - `lang_corrected` - predicted ISO language code after autocorrection of the line text, or from the whole page for a **Short** line
+  - `lang_score` - confidence score of the predicted language code
+  - `lang_score_corrected` - confidence score after autocorrection or from the whole page for a **Short** line
+  - `perplexity` - perplexity score of the original line text
+  - `perplexity_corrected` - perplexity score after autocorrection or from the whole page for a **Short** line
+  - `category` - assigned category of the line (**Clear**, **Rough**, **Noisy**, **Trash**, **Short**, **Non-text**, **Empty**, **N/A**)
+  - `corrected_text` - text of the line after autocorrection, but empty string if unchanged
 
 Tables covering the whole collection are saved next to the script, while raw text files and per-document 
 tabular results are recorded in `../PAGE-TXT/<file>` subdirectories and in `../PAGE-STAT` as separate CSV files named
@@ -104,36 +132,55 @@ Now the statistics output CSV becomes the input CSV:
 Which will replace the last column `path` with a new one `text` and save it in 
 a new `input_with_text.csv` file (also line-by-line).
 
-## Classify extracted texts
+[//]: # (## Classify extracted texts)
 
-For this step you should edit the header variables of `labgID.py`  (like upper and lower text 
-perplexity thresholds, input and output files, confidence threshold for language 
-identification, common languages of the input files, etc.) and then run:
+[//]: # ()
+[//]: # (For this step you should edit the header variables of `labgID.py`  &#40;like upper and lower text )
 
-    python3 langID.py
+[//]: # (perplexity thresholds, input and output files, confidence threshold for language )
 
-Which should create a CSV with the following columns: 
+[//]: # (identification, common languages of the input files, etc.&#41; and then run:)
 
-    file, page, lang, is_text_good, text
+[//]: # ()
+[//]: # (    python3 langID.py)
 
-The resulting file should be filtered out based on the boolean `is_text_good` column to proceed to the next step.
+[//]: # ()
+[//]: # (Which should create a CSV with the following columns: )
 
-When detecting text quality and language, the function may append suffixes to the base ISO language code:
+[//]: # ()
+[//]: # (    file, page, lang, is_text_good, text)
 
- - `_trash` - Assigned if the text is likely gibberish or unusable.
-   - Perplexity ≥ `PERPLEXITY_THRESHOLD_MAX`
-   - Uppercase ratio > 0.9
-   - Predicted language is not Latin
+[//]: # ()
+[//]: # (The resulting file should be filtered out based on the boolean `is_text_good` column to proceed to the next step.)
 
-- `_noise` - Assigned if the text is noisy but potentially usable.
-  - Perplexity ≥ `PERPLEXITY_THRESHOLD_MIN` 
-  - Uppercase ratio > 0.6
-  - Language is not in `COMMON_LANGS`
+[//]: # ()
+[//]: # (When detecting text quality and language, the function may append suffixes to the base ISO language code:)
 
-- `_maybe` - Assigned when the language classifier is uncertain.
-  - the confidence gap between top-1 and top-2 predictions < 0.15.
+[//]: # ()
+[//]: # ( - `_trash` - Assigned if the text is likely gibberish or unusable.)
 
-- `NOISY_trash` (special case) - Returned directly if heuristic pre-checks fail (bad letter/digit/symbol/space ratios).
+[//]: # (   - Perplexity ≥ `PERPLEXITY_THRESHOLD_MAX`)
+
+[//]: # (   - Uppercase ratio > 0.9)
+
+[//]: # (   - Predicted language is not Latin)
+
+[//]: # ()
+[//]: # (- `_noise` - Assigned if the text is noisy but potentially usable.)
+
+[//]: # (  - Perplexity ≥ `PERPLEXITY_THRESHOLD_MIN` )
+
+[//]: # (  - Uppercase ratio > 0.6)
+
+[//]: # (  - Language is not in `COMMON_LANGS`)
+
+[//]: # ()
+[//]: # (- `_maybe` - Assigned when the language classifier is uncertain.)
+
+[//]: # (  - the confidence gap between top-1 and top-2 predictions < 0.15.)
+
+[//]: # ()
+[//]: # (- `NOISY_trash` &#40;special case&#41; - Returned directly if heuristic pre-checks fail &#40;bad letter/digit/symbol/space ratios&#41;.)
 
 ## Extract NER and CONLL-U of pages
 

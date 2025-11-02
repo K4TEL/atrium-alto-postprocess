@@ -38,12 +38,330 @@ import time
 # - N/A:      Used internally for error cases or placeholders.
 # -------------------------
 
+
+
+
+# def main():
+#     """
+#     Main processing logic. Reads the input CSV in chunks, processes each page,
+#     classifies each line, and writes to three separate outputs.
+#     """
+#     INPUT_FILE = "alto_statistics.csv"  # Input CSV from alto_stats_create.py (must have 'file', 'page', 'path')
+#     OUTPUT_TEXT_DIR = "../PAGE_TXT"  # Output (3) - folder for raw extracted text-per-page
+#     OUTPUT_STAT_DIR = "../PAGE_STAT"  # Output (4) - folder for per-document tabular results
+#     CHUNK_SIZE = 500  # How many rows of the input CSV to read at a time
+#     LOG_STEP = 10  # How often to log progress (in number of pages)
+#
+#     # --- Configuration ---
+#     MODEL_PATH = "lid.176.bin"  # path to downloaded fastText model
+#     OUTPUT_STATS_FILE = "line_counts_" + Path(
+#         INPUT_FILE).name  # Output (1) - stats file with line counts, sorted by file/page
+#     OUTPUT_LINES_FILE = "pages_classified_" + Path(
+#         INPUT_FILE).name  # Output (2) - detailed CSV with all lines, sorted by file/page/line
+#     COMMON_LANGS = ["ces", "deu", "eng"]  # Languages considered "common"
+#
+#     SPELLERS = {}
+#     for common_lang in COMMON_LANGS:
+#         speller_type, speller_lang = speller_per_language[common_lang]
+#         if speller_type == 1:
+#             SPELLERS[common_lang] = Speller(speller_lang, only_replacements=True)
+#         else:
+#             SPELLERS[common_lang] = SpellChecker(language=speller_lang)
+#     print(f"Spellcheckers initialized for languages: {', '.join(SPELLERS.keys())}")
+#
+#     # It's recommended to run this on a GPU if available
+#     device = "cuda" if torch.cuda.is_available() else "cpu"
+#     print(f"Using device: {device}")
+#
+#     # --- Load Models ---
+#     print("Loading fastText model (fasttext)...")
+#     try:
+#         model_fasttext = fasttext.load_model(MODEL_PATH)
+#         print("fastText model loaded.")
+#     except ValueError as e:
+#         print(f"Error loading model: {e}", file=sys.stderr)
+#         print(f"Please ensure the model file '{MODEL_PATH}' is in the correct directory.", file=sys.stderr)
+#         sys.exit(1)
+#
+#     print("Loading causal LM (distilgpt2) for perplexity...")
+#     model_id = "distilgpt2"
+#     model_causal = AutoModelForCausalLM.from_pretrained(model_id).to(device)
+#     tokenizer_causal = AutoTokenizer.from_pretrained(model_id)
+#     print("Causal LM loaded.")
+#
+#     # --- 1. Setup ---
+#     print(f"Starting processing of '{INPUT_FILE}'")
+#     Path(OUTPUT_TEXT_DIR).mkdir(parents=True, exist_ok=True)
+#     print(f"Raw text outputs will be saved to '{OUTPUT_TEXT_DIR}/'")
+#     Path(OUTPUT_STAT_DIR).mkdir(parents=True, exist_ok=True)
+#     print(f"Document level results will be saved to '{OUTPUT_STAT_DIR}/'")
+#
+#     try:
+#         # 1. Count total rows for progress tracking
+#         print(f"Analyzing '{INPUT_FILE}'...")
+#         with open(INPUT_FILE, 'r', encoding='utf-8') as f:
+#             total_rows = sum(1 for _ in f) - 1  # Subtract 1 for the header
+#         if total_rows <= 0:
+#             print("Input file is empty or has only a header. Exiting.")
+#             return
+#         print(f"Found {total_rows:,} rows (pages) to process.")
+#
+#         # 2. Open the detailed lines CSV for writing
+#         with open(OUTPUT_LINES_FILE, 'w', encoding='utf-8', newline='') as f_lines_csv:
+#             lines_writer = csv.writer(f_lines_csv)
+#             # Write header for the detailed lines file
+#             lines_writer.writerow(["file", "page", "line", "line_text",
+#                                    "lang_code", "lang_corrected",
+#                                    "lang_score", "lang_score_corrected",
+#                                    "perplexity", "perplexity_corrected",
+#                                    "category", "corrected_text"])
+#             rows_processed, txt_lines_processed = 0, 0
+#             all_stats_chunks = []  # To store modified DataFrames for final stats file
+#
+#             # 3. Process the input stats file in chunks
+#             print(f"Reading '{INPUT_FILE}' in chunks of {CHUNK_SIZE} and recording results every {LOG_STEP} rows...")
+#             reader = pd.read_csv(INPUT_FILE, chunksize=CHUNK_SIZE)
+#
+#             time_start = time.time()
+#
+#             for chunk_df in reader:
+#                 if "path" not in chunk_df.columns or "file" not in chunk_df.columns or "page" not in chunk_df.columns:
+#                     raise ValueError("Input CSV must have 'file', 'page', and 'path' columns.")
+#
+#                 new_stats_rows = []  # To build the new stats chunk
+#
+#                 # 4. Iterate row-by-row (per page) within the chunk
+#                 for idx, row in chunk_df.iterrows():
+#                     file_id = str(row['file'])
+#                     page_id = str(row['page'])
+#                     xml_path = row['path']
+#
+#                     xml_file_directory = Path(xml_path).parent
+#                     separate_dir = str(xml_file_directory).endswith(file_id)
+#                     if not separate_dir:
+#                         page_text_file = Path(OUTPUT_TEXT_DIR) / f"{file_id}-{page_id}.txt"
+#                     else:
+#                         page_text_file = Path(OUTPUT_TEXT_DIR) / file_id / f"{file_id}-{page_id}.txt"
+#                         page_text_file.parent.mkdir(parents=True, exist_ok=True)
+#
+#                     # --- A. Extract Text from ALTO ---
+#                     page_lines = get_text_from_alto(xml_path, page_text_file)
+#                     total_text = " ".join(page_lines)
+#
+#                     # --- B. Save raw text file ---
+#                     if not page_text_file.exists():
+#                         try:
+#                             with open(page_text_file, 'w', encoding='utf-8') as f_txt:
+#                                 f_txt.write("\n".join(page_lines))
+#                         except Exception as e:
+#                             print(f"\n[Warning] Failed to write text file {page_text_file}: {e}", file=sys.stderr)
+#
+#                     # print(f"\tProcessing file '{file_id}', page '{page_id}' with '{len(page_lines)}' lines:")
+#                     # for i, pline in enumerate(page_lines[:5], start=1):
+#                     #     print(f" - line {i}:\t{pline[:60]}{'...' if len(pline) > 60 else ''}")
+#                     # print(" - ...")
+#
+#                     # --- C. Pre-calculate Page-Level stats ---
+#                     # These are used as context for 'Short' lines
+#                     try:
+#                         total_text_perplexity = calculate_perplexity(total_text, model_causal, tokenizer_causal, device)
+#                         labels, scores = model_fasttext.predict(total_text, k=1)
+#                         total_lang_code = labels[0].replace("__label__", "")
+#                         total_score1 = float(scores[0])
+#                         total_corrected_text, _ = autocorrect_text(total_text, total_lang_code, SPELLERS)
+#
+#                     except Exception as e:
+#                         total_corrected_text = ""
+#                         total_lang_code = ""
+#                         total_score1 = 0.0
+#                         total_text_perplexity = 0.0
+#                         print(
+#                             f"\n[Error] Model prediction failed for page text in file '{file_id}', page '{page_id}': {e}",
+#                             file=sys.stderr)
+#
+#                     # --- D. Process each line on the page ---
+#                     line_counts = {"Clear": 0, "Noisy": 0, "Trash": 0, "Non-text": 0, "Empty": 0, "Rough": 0,
+#                                    "Short": 0}
+#                     language_counts = {lang: 0 for lang in COMMON_LANGS}
+#                     language_counts['other'] = 0
+#
+#                     if len(page_lines) == 0:
+#                         print(f"\t[Warning] No text lines extracted from file '{file_id}', page '{page_id}'")
+#                         continue
+#
+#                     for l_num, line in enumerate(page_lines, start=1):
+#                         # Classify the line, passing in page-level stats as context
+#                         result = classify_line(line, model_ft=model_fasttext, model_ppl=model_causal,
+#                                                tokenizer_ppl=tokenizer_causal,
+#                                                corrected_page_text=total_corrected_text,
+#                                                corrected_page_lang=total_lang_code,
+#                                                corrected_page_lang_score=total_score1,
+#                                                corrected_page_perplexity=total_text_perplexity,
+#                                                spellers=SPELLERS, device=device)
+#
+#                         # Add to counts
+#                         if result['category'] in line_counts:
+#                             line_counts[result['category']] += 1
+#                         else:
+#                             # This handles 'N/A' or other unexpected categories
+#                             line_counts[result['category']] = 1
+#
+#                         lang_saved = False
+#                         for lang_name in language_counts.keys():
+#                             if result['lang_code'].startswith(lang_name):
+#                                 language_counts[lang_name] += 1
+#                                 lang_saved = True
+#                                 break
+#                         if not lang_saved:
+#                             language_counts['other'] += 1
+#
+#                         # Write to detailed CSV
+#                         lines_writer.writerow([
+#                             file_id, page_id, l_num, result['text'], result['lang_code'], result['lang_corrected'],
+#                             result['lang_score'], result['lang_score_corrected'],
+#                             result['perplexity'], result["perplexity_corrected"], result['category'],
+#                             result['corrected_text']
+#                         ])
+#
+#                     # --- E. Prepare new row for the stats file ---
+#                     new_row = row.to_dict()
+#                     new_row['clear_lines'] = line_counts['Clear']
+#                     new_row['noisy_lines'] = line_counts['Noisy']
+#                     new_row['trash_lines'] = line_counts['Trash']
+#                     new_row['nontxt_lines'] = line_counts['Non-text']
+#                     new_row['empty_lines'] = line_counts['Empty']
+#                     new_row['rough_lines'] = line_counts['Rough']
+#                     new_row['short_lines'] = line_counts['Short']
+#
+#                     # record top 2 languages detected on the page
+#                     new_row['languages'] = ""
+#                     sorted_langs = sorted(language_counts.items(), key=lambda x: x[1], reverse=True)
+#                     top_langs = [lang for lang, count in sorted_langs if count > 0][:2]
+#                     if top_langs:
+#                         new_row['languages'] = "-".join(top_langs)
+#
+#                     new_stats_rows.append(new_row)
+#
+#                     print(f"\tProcessed file '{file_id}', page '{page_id}' with '{len(page_lines)}' lines...")
+#
+#                     # --- F. Log progress ---
+#                     rows_processed += 1
+#                     txt_lines_processed += len(page_lines)
+#                     percentage = (rows_processed / total_rows) * 100
+#
+#                     time_spent = time.time() - time_start
+#                     time_minutes = time_spent / 60
+#                     time_per_file = time_spent / rows_processed
+#                     time_per_line = time_spent / txt_lines_processed
+#                     # print(f"\n  -> Time spent so far:\t{time_spent:.1f} sec\t({time_minutes:.1f} minutes)\n   -> Avg time per PAGE:\t{time_per_file:.2f} sec\n    -> Avg time per LINE:\t{time_per_line:.2f} sec")
+#                     # print(f"\tResults for file '{file_id}', page '{page_id}' with '{len(page_lines)}' lines:\n{line_counts},\n\tLanguages:\t{new_row['languages']}\n")
+#
+#                     sys.stdout.write(
+#                         f"* * * Progress: [ {rows_processed:,} / {total_rows:,} ] pages - ( {percentage:.1f}% ) processed in [ {round(time_minutes, 1)} min ] * * *\n")
+#                     sys.stdout.flush()
+#
+#                     if idx % LOG_STEP == 0:
+#                         f_lines_csv.flush()
+#                         print(
+#                             f"\n  -> Time spent so far:\t{time_spent:.1f} sec\t({time_minutes:.1f} minutes)\n   -> Avg time per PAGE:\t{time_per_file:.2f} sec\n    -> Avg time per LINE:\t{time_per_line:.2f} sec")
+#
+#                         print(f"\tFile '{file_id}', page '{page_id}' with '{len(page_lines)}' lines:")
+#                         for i, pline in enumerate(page_lines[:10], start=1):
+#                             print(f" - line {i}:\t{pline[:60]}{'...' if len(pline) > 60 else ''}")
+#                         print(" - ...")
+#                         print(
+#                             f"\tResults for file '{file_id}', page '{page_id}' with '{len(page_lines)}' lines:\n{line_counts},\n\tLanguages:\t{new_row['languages']}\n")
+#
+#                 # Add the modified chunk to our list
+#                 all_stats_chunks.append(pd.DataFrame(new_stats_rows))
+#                 f_lines_csv.flush()
+#
+#
+#         # --- 5. Post-Processing and Saving ---
+#         print("\nProcessing complete.")
+#         # time statistics
+#         time_total = time.time() - time_start
+#         time_total_minutes = time_total / 60
+#         time_per_file_total = time_total / rows_processed
+#         time_per_line_total = time_total / txt_lines_processed
+#         print(f"Total time spent:\t{time_total:.1f} sec\t({time_total_minutes:.1f} minutes)")
+#         print(f"Overall average time per PAGE:\t{time_per_file_total:.2f} sec")
+#         print(f"Overall average time per LINE:\t{time_per_line_total:.2f} sec")
+#
+#         # --- A. Save the main stats file ---
+#         if all_stats_chunks:
+#             print("Consolidating stats file...")
+#             final_stats_df = pd.concat(all_stats_chunks, ignore_index=True)
+#
+#             # Sort the stats file by file and page
+#             print(f"Sorting '{OUTPUT_STATS_FILE}' by file, page...")
+#             final_stats_df.sort_values(by=["file", "page"], inplace=True)
+#
+#             final_stats_df.to_csv(OUTPUT_STATS_FILE, index=False, header=True)
+#             print(f"Updated stats with line counts saved to: {OUTPUT_STATS_FILE}")
+#
+#             # --- B. Sort the detailed lines file ---
+#             # The file is now closed, so we can re-read it with pandas, sort, and overwrite.
+#             print(f"Sorting '{OUTPUT_LINES_FILE}' by file, page, and line. This may take a moment...")
+#             try:
+#                 df_lines = pd.read_csv(OUTPUT_LINES_FILE)
+#                 df_lines.sort_values(by=["file", "page", "line"], inplace=True)
+#                 df_lines.to_csv(OUTPUT_LINES_FILE, index=False, header=True)
+#                 print("Detailed lines file sorting complete.")
+#                 print(f"Detailed line-by-line analysis saved to: {OUTPUT_LINES_FILE}")
+#
+#                 # --- C. Split results into per-document tables ---
+#                 print(f"Splitting total CSVs into per-document tables in '{OUTPUT_STAT_DIR}'...")
+#                 # Ensure the directory exists (it should, but good to double-check)
+#                 Path(OUTPUT_STAT_DIR).mkdir(parents=True, exist_ok=True)
+#
+#                 all_file_ids = final_stats_df['file'].unique()
+#                 split_count = 0
+#                 for file_id in all_file_ids:
+#                     # Ensure file_id is a string, as it might be loaded as numeric
+#                     file_id_str = str(file_id)
+#
+#                     # Define output paths
+#                     doc_stats_path = Path(OUTPUT_STAT_DIR) / f"line_counts_{file_id_str}.csv"
+#                     doc_lines_path = Path(OUTPUT_STAT_DIR) / f"pages_classified_{file_id_str}.csv"
+#
+#                     # Filter stats for this file
+#                     doc_stats_df = final_stats_df[final_stats_df['file'] == file_id]
+#                     if not doc_stats_df.empty:
+#                         doc_stats_df.to_csv(doc_stats_path, index=False, header=True)
+#
+#                     # Filter detailed lines for this file
+#                     doc_lines_df = df_lines[df_lines['file'] == file_id]
+#                     if not doc_lines_df.empty:
+#                         doc_lines_df.to_csv(doc_lines_path, index=False, header=True)
+#
+#                     split_count += 1
+#
+#                 print(f"Successfully split results into {split_count} per-document sets.")
+#
+#             except Exception as e:
+#                 print(f"\n[Error] Failed to sort {OUTPUT_LINES_FILE} or split per-document files: {e}", file=sys.stderr)
+#                 print("The unsorted file may still be available. Per-document splitting skipped.")
+#
+#         else:
+#             print("No data processed, stats file and per-document files not created.")
+#
+#         print(f"Raw text files saved in: {OUTPUT_TEXT_DIR}/")
+#
+#     except FileNotFoundError:
+#         print(f"\n[Error] Input file not found at '{INPUT_FILE}'", file=sys.stderr)
+#     except Exception as e:
+#         print(f"\nAn unexpected error occurred: {e}", file=sys.stderr)
+#         import traceback
+#         traceback.print_exc()
+
+
 def main():
     """
-    Main processing logic. Reads the input CSV in chunks, processes each page,
-    classifies each line, and writes to three separate outputs.
-    """
-    INPUT_FILE = "alto_statistics.csv"  # Input CSV from alto_stats_create.py (must have 'file', 'page', 'path')
+        Main processing logic. Reads the input CSV in chunks, processes each page,
+        classifies each line, and writes to three separate outputs.
+        """
+    INPUT_FILE = "test_alto_stats.csv"  # Input CSV from alto_stats_create.py (must have 'file', 'page', 'path')
     OUTPUT_TEXT_DIR = "../PAGE_TXT"  # Output (3) - folder for raw extracted text-per-page
     OUTPUT_STAT_DIR = "../PAGE_STAT"  # Output (4) - folder for per-document tabular results
     CHUNK_SIZE = 500  # How many rows of the input CSV to read at a time
@@ -94,45 +412,44 @@ def main():
     print(f"Document level results will be saved to '{OUTPUT_STAT_DIR}/'")
 
     try:
-        # 1. Count total rows for progress tracking
+        # 1. Count total rows
         print(f"Analyzing '{INPUT_FILE}'...")
         with open(INPUT_FILE, 'r', encoding='utf-8') as f:
-            total_rows = sum(1 for _ in f) - 1  # Subtract 1 for the header
+            total_rows = sum(1 for _ in f) - 1
         if total_rows <= 0:
-            print("Input file is empty or has only a header. Exiting.")
+            print("Input file is empty. Exiting.")
             return
         print(f"Found {total_rows:,} rows (pages) to process.")
 
-        # 2. Open the detailed lines CSV for writing
+        # 2. Open the detailed lines CSV
         with open(OUTPUT_LINES_FILE, 'w', encoding='utf-8', newline='') as f_lines_csv:
             lines_writer = csv.writer(f_lines_csv)
-            # Write header for the detailed lines file
             lines_writer.writerow(["file", "page", "line", "line_text",
                                    "lang_code", "lang_corrected",
                                    "lang_score", "lang_score_corrected",
                                    "perplexity", "perplexity_corrected",
                                    "category", "corrected_text"])
             rows_processed, txt_lines_processed = 0, 0
-            all_stats_chunks = []  # To store modified DataFrames for final stats file
+            all_stats_chunks = []
 
-            # 3. Process the input stats file in chunks
+            # 3. Process the input stats file
             print(f"Reading '{INPUT_FILE}' in chunks of {CHUNK_SIZE} and recording results every {LOG_STEP} rows...")
             reader = pd.read_csv(INPUT_FILE, chunksize=CHUNK_SIZE)
-
             time_start = time.time()
 
             for chunk_df in reader:
-                if "path" not in chunk_df.columns or "file" not in chunk_df.columns or "page" not in chunk_df.columns:
-                    raise ValueError("Input CSV must have 'file', 'page', and 'path' columns.")
+                if "path" not in chunk_df.columns:
+                    raise ValueError("Input CSV must have 'path' column.")
 
-                new_stats_rows = []  # To build the new stats chunk
+                new_stats_rows = []
 
-                # 4. Iterate row-by-row (per page) within the chunk
+                # 4. Iterate row-by-row (per page)
                 for idx, row in chunk_df.iterrows():
                     file_id = str(row['file'])
                     page_id = str(row['page'])
                     xml_path = row['path']
 
+                    # (Path logic unchanged)
                     xml_file_directory = Path(xml_path).parent
                     separate_dir = str(xml_file_directory).endswith(file_id)
                     if not separate_dir:
@@ -146,6 +463,7 @@ def main():
                     total_text = " ".join(page_lines)
 
                     # --- B. Save raw text file ---
+                    # (Unchanged)
                     if not page_text_file.exists():
                         try:
                             with open(page_text_file, 'w', encoding='utf-8') as f_txt:
@@ -153,30 +471,24 @@ def main():
                         except Exception as e:
                             print(f"\n[Warning] Failed to write text file {page_text_file}: {e}", file=sys.stderr)
 
-                    # print(f"\tProcessing file '{file_id}', page '{page_id}' with '{len(page_lines)}' lines:")
-                    # for i, pline in enumerate(page_lines[:5], start=1):
-                    #     print(f" - line {i}:\t{pline[:60]}{'...' if len(pline) > 60 else ''}")
-                    # print(" - ...")
-
                     # --- C. Pre-calculate Page-Level stats ---
-                    # These are used as context for 'Short' lines
                     try:
                         total_text_perplexity = calculate_perplexity(total_text, model_causal, tokenizer_causal, device)
                         labels, scores = model_fasttext.predict(total_text, k=1)
                         total_lang_code = labels[0].replace("__label__", "")
                         total_score1 = float(scores[0])
-                        total_corrected_text, _ = autocorrect_text(total_text, total_lang_code, SPELLERS)
-
+                        # Note: page-level autocorrect is only used for 'Short' lines,
+                        # so we can just pass the stats, not the full text.
+                        # total_corrected_text, _ = autocorrect_text(total_text, total_lang_code, SPELLERS)
                     except Exception as e:
-                        total_corrected_text = ""
+                        # total_corrected_text = "" # No longer needed
                         total_lang_code = ""
                         total_score1 = 0.0
                         total_text_perplexity = 0.0
-                        print(
-                            f"\n[Error] Model prediction failed for page text in file '{file_id}', page '{page_id}': {e}",
-                            file=sys.stderr)
+                        print(f"\n[Error] Page-level prediction failed for {file_id}, page {page_id}: {e}",
+                              file=sys.stderr)
 
-                    # --- D. Process each line on the page ---
+                    # --- D. Process each line on the page (MODIFIED FOR BATCH) ---
                     line_counts = {"Clear": 0, "Noisy": 0, "Trash": 0, "Non-text": 0, "Empty": 0, "Rough": 0,
                                    "Short": 0}
                     language_counts = {lang: 0 for lang in COMMON_LANGS}
@@ -184,60 +496,75 @@ def main():
 
                     if len(page_lines) == 0:
                         print(f"\t[Warning] No text lines extracted from file '{file_id}', page '{page_id}'")
-                        continue
+                        # (Need to still append an empty stats row)
+                        new_row = row.to_dict()
+                        new_row['clear_lines'] = 0
+                        new_row['noisy_lines'] = 0
+                        new_row['trash_lines'] = 0
+                        new_row['nontxt_lines'] = 0
+                        new_row['empty_lines'] = 0
+                        new_row['rough_lines'] = 0
+                        new_row['short_lines'] = 0
+                        new_row['languages'] = ""
+                        new_stats_rows.append(new_row)
+                        # (Continue to F. Log progress)
 
-                    for l_num, line in enumerate(page_lines, start=1):
-                        # Classify the line, passing in page-level stats as context
-                        result = classify_line(line, model_ft=model_fasttext, model_ppl=model_causal,
-                                               tokenizer_ppl=tokenizer_causal,
-                                               corrected_page_text=total_corrected_text,
-                                               corrected_page_lang=total_lang_code,
-                                               corrected_page_lang_score=total_score1,
-                                               corrected_page_perplexity=total_text_perplexity,
-                                               spellers=SPELLERS, device=device)
+                    else:
+                        # --- BATCH CALL ---
+                        # Classify all lines on the page at once
+                        all_line_results = classify_lines_batch(
+                            page_lines,
+                            model_ft=model_fasttext,
+                            model_ppl=model_causal,
+                            tokenizer_ppl=tokenizer_causal,
+                            corrected_page_lang=total_lang_code,
+                            corrected_page_lang_score=total_score1,
+                            corrected_page_perplexity=total_text_perplexity,
+                            spellers=SPELLERS,
+                            device=device
+                        )
 
-                        # Add to counts
-                        if result['category'] in line_counts:
-                            line_counts[result['category']] += 1
-                        else:
-                            # This handles 'N/A' or other unexpected categories
-                            line_counts[result['category']] = 1
+                        # --- Iterate over RESULTS, not lines ---
+                        for l_num, result in enumerate(all_line_results, start=1):
+                            # Add to counts
+                            if result['category'] in line_counts:
+                                line_counts[result['category']] += 1
+                            else:
+                                line_counts[result['category']] = 1
 
-                        lang_saved = False
-                        for lang_name in language_counts.keys():
-                            if result['lang_code'].startswith(lang_name):
-                                language_counts[lang_name] += 1
-                                lang_saved = True
-                                break
-                        if not lang_saved:
-                            language_counts['other'] += 1
+                            # Add to language counts
+                            lang_saved = False
+                            for lang_name in language_counts.keys():
+                                if result['lang_code'].startswith(lang_name):
+                                    language_counts[lang_name] += 1
+                                    lang_saved = True
+                                    break
+                            if not lang_saved:
+                                language_counts['other'] += 1
 
-                        # Write to detailed CSV
-                        lines_writer.writerow([
-                            file_id, page_id, l_num, result['text'], result['lang_code'], result['lang_corrected'],
-                            result['lang_score'], result['lang_score_corrected'],
-                            result['perplexity'], result["perplexity_corrected"], result['category'],
-                            result['corrected_text']
-                        ])
+                            # Write to detailed CSV
+                            lines_writer.writerow([
+                                file_id, page_id, l_num, result['text'], result['lang_code'], result['lang_corrected'],
+                                result['lang_score'], result['lang_score_corrected'],
+                                result['perplexity'], result["perplexity_corrected"], result['category'],
+                                result['corrected_text']
+                            ])
 
-                    # --- E. Prepare new row for the stats file ---
-                    new_row = row.to_dict()
-                    new_row['clear_lines'] = line_counts['Clear']
-                    new_row['noisy_lines'] = line_counts['Noisy']
-                    new_row['trash_lines'] = line_counts['Trash']
-                    new_row['nontxt_lines'] = line_counts['Non-text']
-                    new_row['empty_lines'] = line_counts['Empty']
-                    new_row['rough_lines'] = line_counts['Rough']
-                    new_row['short_lines'] = line_counts['Short']
+                        # --- E. Prepare new row for the stats file ---
+                        new_row = row.to_dict()
+                        new_row['clear_lines'] = line_counts['Clear']
+                        new_row['noisy_lines'] = line_counts['Noisy']
+                        new_row['trash_lines'] = line_counts['Trash']
+                        new_row['nontxt_lines'] = line_counts['Non-text']
+                        new_row['empty_lines'] = line_counts['Empty']
+                        new_row['rough_lines'] = line_counts['Rough']
+                        new_row['short_lines'] = line_counts['Short']
 
-                    # record top 2 languages detected on the page
-                    new_row['languages'] = ""
-                    sorted_langs = sorted(language_counts.items(), key=lambda x: x[1], reverse=True)
-                    top_langs = [lang for lang, count in sorted_langs if count > 0][:2]
-                    if top_langs:
-                        new_row['languages'] = "-".join(top_langs)
+                        sorted_langs = sorted(language_counts.items(), key=lambda x: x[1], reverse=True)
+                        top_langs = [lang for lang, count in sorted_langs if count > 0][:2]
+                        new_row['languages'] = "-".join(top_langs) if top_langs else ""
 
-                    new_stats_rows.append(new_row)
+                        new_stats_rows.append(new_row)
 
                     print(f"\tProcessed file '{file_id}', page '{page_id}' with '{len(page_lines)}' lines...")
 
@@ -245,34 +572,25 @@ def main():
                     rows_processed += 1
                     txt_lines_processed += len(page_lines)
                     percentage = (rows_processed / total_rows) * 100
-
                     time_spent = time.time() - time_start
                     time_minutes = time_spent / 60
-                    time_per_file = time_spent / rows_processed
-                    time_per_line = time_spent / txt_lines_processed
-                    # print(f"\n  -> Time spent so far:\t{time_spent:.1f} sec\t({time_minutes:.1f} minutes)\n   -> Avg time per PAGE:\t{time_per_file:.2f} sec\n    -> Avg time per LINE:\t{time_per_line:.2f} sec")
-                    # print(f"\tResults for file '{file_id}', page '{page_id}' with '{len(page_lines)}' lines:\n{line_counts},\n\tLanguages:\t{new_row['languages']}\n")
 
                     sys.stdout.write(
                         f"* * * Progress: [ {rows_processed:,} / {total_rows:,} ] pages - ( {percentage:.1f}% ) processed in [ {round(time_minutes, 1)} min ] * * *\n")
                     sys.stdout.flush()
 
-                    if idx % LOG_STEP == 0:
+                    if rows_processed % LOG_STEP == 0:  # Log based on rows_processed
                         f_lines_csv.flush()
+                        time_per_file = time_spent / rows_processed if rows_processed > 0 else 0
+                        time_per_line = time_spent / txt_lines_processed if txt_lines_processed > 0 else 0
                         print(
                             f"\n  -> Time spent so far:\t{time_spent:.1f} sec\t({time_minutes:.1f} minutes)\n   -> Avg time per PAGE:\t{time_per_file:.2f} sec\n    -> Avg time per LINE:\t{time_per_line:.2f} sec")
-
-                        print(f"\tFile '{file_id}', page '{page_id}' with '{len(page_lines)}' lines:")
-                        for i, pline in enumerate(page_lines[:10], start=1):
-                            print(f" - line {i}:\t{pline[:60]}{'...' if len(pline) > 60 else ''}")
-                        print(" - ...")
                         print(
-                            f"\tResults for file '{file_id}', page '{page_id}' with '{len(page_lines)}' lines:\n{line_counts},\n\tLanguages:\t{new_row['languages']}\n")
+                            f"\tResults for file '{file_id}', page '{page_id}' with '{len(page_lines)}' lines:\n{line_counts},\n\tLanguages:\t{new_row.get('languages', 'N/A')}\n")
 
                 # Add the modified chunk to our list
                 all_stats_chunks.append(pd.DataFrame(new_stats_rows))
                 f_lines_csv.flush()
-
 
         # --- 5. Post-Processing and Saving ---
         print("\nProcessing complete.")

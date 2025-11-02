@@ -4,6 +4,7 @@ import fasttext
 import sys
 import re
 import torch
+from torch import nn
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import subprocess
 import os
@@ -213,6 +214,304 @@ def calculate_perplexity(text: str, model, tokenizer, device) -> float:
     except Exception as e:
         print(f"\n[Error] Perplexity calculation failed for text: '{text[:50]}...': {e}", file=sys.stderr)
         return 0.0  # Return 0.0 on error
+
+
+# --- NEW: BATCH PERPLEXITY FUNCTION ---
+def calculate_perplexity_batch(texts: list[str], model, tokenizer, device) -> list[float]:
+    """
+    Calculates the perplexity for a batch of text strings.
+    """
+    if not texts:
+        return []
+
+    # Filter out empty strings, which get 0.0 perplexity
+    non_empty_texts = []
+    original_indices = []
+    for i, text in enumerate(texts):
+        if text and text.strip():
+            non_empty_texts.append(text.strip())
+            original_indices.append(i)
+
+    if not non_empty_texts:
+        return [0.0] * len(texts)  # Return all zeros if no valid text
+
+    results_tensor = torch.zeros(len(texts), device='cpu')
+
+    try:
+        # Tokenize the batch
+        max_length = model.config.max_position_embeddings
+        tokenizer.pad_token = tokenizer.eos_token
+        encodings = tokenizer(
+            non_empty_texts,
+            return_tensors="pt",
+            padding=True,  # Pad to the longest sequence in the batch
+            truncation=True,  # Truncate sequences longer than max_length
+            max_length=max_length
+        )
+
+        input_ids = encodings.input_ids.to(device)
+        attention_mask = encodings.attention_mask.to(device)
+
+        # Create labels, masking out padding tokens
+        target_ids = input_ids.clone()
+        target_ids[target_ids == tokenizer.pad_token_id] = -100
+
+        with torch.no_grad():
+            outputs = model(input_ids, attention_mask=attention_mask, labels=target_ids)
+
+            # To get per-sequence loss, we must calculate it manually
+            # 1. Shift logits and labels
+            logits = outputs.logits
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = target_ids[..., 1:].contiguous()
+
+            # 2. Use CrossEntropyLoss with reduction='none'
+            loss_fct = nn.CrossEntropyLoss(reduction='none')
+            loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+
+            # 3. Reshape and apply mask
+            loss_per_token = loss.view(target_ids.size(0), -1)
+            # Create a mask for non-padding/non-masked tokens
+            non_masked_tokens = (shift_labels != -100)
+
+            # 4. Sum loss and count tokens for each sequence
+            sequence_loss = (loss_per_token * non_masked_tokens).sum(dim=1)
+            num_tokens = non_masked_tokens.sum(dim=1)
+
+            # Avoid division by zero for sequences with 0 valid tokens
+            num_tokens = torch.clamp(num_tokens, min=1)
+
+            # 5. Calculate mean loss and perplexity
+            mean_loss = sequence_loss / num_tokens
+            ppl_batch = torch.exp(mean_loss)
+
+        # Place results back into the original list structure
+        ppl_list = ppl_batch.to('cpu')
+        for i, ppl_value in enumerate(ppl_list):
+            results_tensor[original_indices[i]] = ppl_value.item()
+
+        return results_tensor.tolist()
+
+    except Exception as e:
+        print(f"\n[Error] Batch perplexity calculation failed: {e}", file=sys.stderr)
+        # Fallback to 0.0 for all in batch on error
+        return [0.0] * len(texts)
+
+
+# --- NEW: BATCH CLASSIFICATION FUNCTION ---
+def classify_lines_batch(lines: list[str], model_ft, model_ppl, tokenizer_ppl, spellers: dict, device,
+                         corrected_page_text="", corrected_page_lang="", corrected_page_lang_score=0.0,
+                         corrected_page_perplexity=0.0) -> list[dict]:
+    """
+    Detects language, perplexity, and quality category for a batch of text lines.
+    """
+    n_lines = len(lines)
+    if n_lines == 0:
+        return []
+
+    final_results = [None] * n_lines
+    lines_to_process = []
+    original_indices = []  # Map from batch_index -> original_index
+
+    # --- 1. Pre-filter Empty and Non-text lines ---
+    for i, line in enumerate(lines):
+        clean_text = line.strip()
+
+        # --- Handle Empty Line ---
+        if not clean_text:
+            final_results[i] = {
+                "text": line, "lang_code": "N/A", "lang_score": 0.0,
+                "perplexity": 0.0, "category": "Empty",
+                "corrected_text": "", "lang_corrected": "", "lang_score_corrected": 0.0,
+                "perplexity_corrected": 0.0
+            }
+            continue
+
+        # --- Heuristic Pre-check (Quickly filter out non-text) ---
+        n_chars = len(clean_text)
+        letters = sum(c.isalpha() for c in clean_text)
+        digits = sum(c.isdigit() for c in clean_text)
+        symbols = sum(not c.isalnum() and not c.isspace() for c in clean_text)
+        unique_symbols = set(c for c in clean_text if not c.isspace())
+        space_chars = sum(c.isspace() for c in clean_text)
+
+        if n_chars == 0 or space_chars == n_chars:
+            final_results[i] = {
+            "text": line, "lang_code": "N/A", "lang_score": 0.0,
+            "perplexity": 0.0, "category": "Empty",
+            "corrected_text": "", "lang_corrected": "", "lang_score_corrected": 0.0,
+            "perplexity_corrected": 0.0
+        }
+
+        letter_ratio = letters / n_chars
+        digit_ratio = digits / n_chars
+        symbol_ratio = symbols / n_chars
+
+        if (letter_ratio < 0.3 or digit_ratio > 0.4 or symbol_ratio > 0.5 or
+                len(clean_text) < 4 or len(unique_symbols) < 3):
+            final_results[i] = {
+                "text": line, "lang_code": "N/A", "lang_score": 0.0,
+                "perplexity": 0.0, "category": "Non-text",
+                "corrected_text": "", "lang_corrected": "", "lang_score_corrected": 0.0,
+                "perplexity_corrected": 0.0
+            }
+            continue
+
+        # This line is valid for processing
+        lines_to_process.append(clean_text)
+        original_indices.append(i)
+
+    if not lines_to_process:
+        return final_results  # All lines were empty or non-text
+
+    # --- 3. Run Batch Predictions on Original Text ---
+    try:
+        ppl_results = calculate_perplexity_batch(lines_to_process, model_ppl, tokenizer_ppl, device)
+        labels_batch, scores_batch = model_ft.predict(lines_to_process, k=1)
+
+        lang_codes = [l[0].replace("__label__", "") for l in labels_batch]
+        lang_scores = [s[0] for s in scores_batch]
+    except Exception as e:
+        print(f"\n[Error] Batch model prediction failed: {e}", file=sys.stderr)
+        # On failure, mark all as "Trash"
+        for i, batch_idx in enumerate(original_indices):
+            final_results[batch_idx] = {
+                "text": lines[batch_idx], "lang_code": "N/A", "lang_score": 0.0,
+                "perplexity": 0.0, "category": "Trash",
+                "corrected_text": "", "lang_corrected": "", "lang_score_corrected": 0.0,
+                "perplexity_corrected": 0.0
+            }
+        return final_results
+
+    # --- 4. & 5. Autocorrect and Run Predictions on Corrected Text ---
+
+    # Identify lines that need correction
+    texts_to_correct = []
+    correction_batch_indices = []  # Index *within lines_to_process*
+
+    for i, line in enumerate(lines_to_process):
+        n_words = len(line.split(" "))
+        # Only correct lines that are not "Short"
+        if n_words >= 3:
+            corrected, _ = autocorrect_text(line, lang_codes[i], spellers)
+            if corrected != line:
+                texts_to_correct.append(corrected)
+                correction_batch_indices.append(i)
+
+    # Run batch predictions on the *subset* of corrected texts
+    ppl_corrected_results = []
+    lang_codes_corrected = []
+    lang_scores_corrected = []
+
+    if texts_to_correct:
+        try:
+            ppl_corrected_results = calculate_perplexity_batch(texts_to_correct, model_ppl, tokenizer_ppl, device)
+            labels_corr_batch, scores_corr_batch = model_ft.predict(texts_to_correct, k=1)
+            lang_codes_corrected = [l[0].replace("__label__", "") for l in labels_corr_batch]
+            lang_scores_corrected = [s[0] for s in scores_corr_batch]
+        except Exception as e:
+            print(f"\n[Error] Batch model prediction failed for corrected text: {e}", file=sys.stderr)
+            # If correction analysis fails, we'll just proceed without corrected data
+            texts_to_correct = []  # Clear this to prevent mapping
+
+    # Map corrected results back
+    corrected_data_map = {}  # Map by batch_index
+    for i, corrected_text in enumerate(texts_to_correct):
+        batch_idx = correction_batch_indices[i]
+        corrected_data_map[batch_idx] = {
+            "corrected_text": corrected_text,
+            "perplexity_corrected": ppl_corrected_results[i],
+            "lang_corrected": lang_codes_corrected[i],
+            "lang_score_corrected": lang_scores_corrected[i]
+        }
+
+    # --- 6. Categorize and Assemble Final Dictionaries ---
+    for i, line in enumerate(lines_to_process):
+        original_idx = original_indices[i]
+        n_words = len(line.split(" "))
+
+        # Get original text predictions
+        text_perplexity = ppl_results[i]
+        lang_code = lang_codes[i]
+        score1 = lang_scores[i]
+
+        # --- Handle "Short" lines ---
+        if n_words < 3:
+            final_results[original_idx] = {
+                "text": lines[original_idx],  # Use original full line with whitespace
+                "lang_code": lang_code, "lang_score": score1,
+                "perplexity": text_perplexity, "category": "Short",
+                "corrected_text": "",
+                # "corrected_text": corrected_page_text,  # optional, takes space
+                "lang_corrected": corrected_page_lang,
+                "lang_score_corrected": corrected_page_lang_score,
+                "perplexity_corrected": corrected_page_perplexity
+            }
+            continue
+
+        # --- Handle regular lines ---
+
+        # Get corrected data if it exists
+        if i in corrected_data_map:
+            corr_data = corrected_data_map[i]
+            corrected_text = corr_data["corrected_text"]
+            corrected_text_perplexity = corr_data["perplexity_corrected"]
+            corrected_lang_code = corr_data["lang_corrected"]
+            correcte_score1 = corr_data["lang_score_corrected"]
+        else:
+            corrected_text = ""
+            corrected_text_perplexity = 0.0
+            corrected_lang_code = ""
+            correcte_score1 = 0.0
+
+        # --- Categorize (Clear, Noisy, Trash, Rough) ---
+        category = "Clear"
+        letters = sum(c.isalpha() for c in line)  # 'line' is already clean_text
+        upper_ratio = sum(c.isupper() for c in line) / letters if letters > 0 else 0.0
+        is_Latin = lang_code.split("_")[-1] == "Latn"
+        is_common = lang_code.split("_")[0] in COMMON_LANGS
+        is_cor_Latin = corrected_lang_code.split("_")[-1] == "Latn" if corrected_lang_code else is_Latin
+        is_cor_common = corrected_lang_code.split("_")[0] in COMMON_LANGS if corrected_lang_code else is_common
+
+        if text_perplexity >= PERPLEXITY_THRESHOLD_MAX:
+            if corrected_text_perplexity == 0.0 or corrected_text_perplexity >= PERPLEXITY_THRESHOLD_MAX:
+                category = "Trash"
+        elif upper_ratio > 0.9 and letters > 10:
+            category = "Trash"
+        elif not is_Latin and not is_cor_Latin:
+            category = "Trash"
+        elif text_perplexity >= PERPLEXITY_THRESHOLD_MIN:
+            if corrected_text_perplexity == 0.0 or corrected_text_perplexity >= PERPLEXITY_THRESHOLD_MIN:
+                category = "Noisy"
+        elif upper_ratio > 0.6 and letters > 10:
+            category = "Noisy"
+        elif not is_common and not is_cor_common:
+            category = "Noisy"
+        elif score1 < LANG_SCORE_ROUGH and correcte_score1 < LANG_SCORE_ROUGH:
+            category = "Noisy"
+
+        if correcte_score1 > LANG_SCORE_ROUGH and any(corrected_lang_code.startswith(cl) for cl in COMMON_LANGS):
+            category = "Rough"
+        elif score1 > LANG_SCORE_ROUGH and any(lang_code.startswith(cl) for cl in COMMON_LANGS):
+            category = "Rough"
+
+        if score1 > LANG_SCORE_CLEAR and any(lang_code.startswith(cl) for cl in COMMON_LANGS):
+            category = "Clear"
+
+        final_results[original_idx] = {
+            "text": lines[original_idx],  # Use original full line with whitespace
+            "corrected_text": corrected_text,
+            "lang_code": lang_code,
+            "lang_corrected": corrected_lang_code,
+            "lang_score": score1,
+            "lang_score_corrected": correcte_score1,
+            "perplexity": text_perplexity,
+            "perplexity_corrected": corrected_text_perplexity,
+            "category": category
+        }
+
+    return final_results
+
 
 
 def classify_line(line: str, model_ft, model_ppl, tokenizer_ppl, spellers: dict, device,
