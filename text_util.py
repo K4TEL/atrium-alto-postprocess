@@ -30,17 +30,17 @@ LANG_SCORE_CLEAR = 0.9  # Language score >= this -> "Clear"
 
 # Spell-checkers for correction heuristics
 speller_per_language = {
-        "eng": (1, "en"),
+        "eng": (1, "en"),  # 1 or 0
         "ces": (1, "cs"),
         "deu": (0, "de"),
         # "pol": (1, "pl"),
         "rus": (1, "ru"),
         "ukr": (1, "uk"),
         # "tur": (1, "tr"),
-        "spa": (1, "es"),
+        "spa": (0, "es"),
         "por": (0, "pt"),
-        "ita": (1, "it"),
-        "fra": (1, "fr"),
+        "ita": (0, "it"),
+        "fra": (0, "fr"),
         "ell": (1, "el"),
         # "vie": (1, "vi"),
         "pes": (0, "fa"),
@@ -62,8 +62,12 @@ def get_text_from_alto(xml_path: str, txt_path: str) -> list[str]:
         Returns an empty list if the file is not found or 'alto-tools' fails.
     """
     if not os.path.exists(xml_path):
-        print(f"[Warning] ALTO file not found: {xml_path}", file=sys.stderr)
-        return []
+        backup_xml_path = Path(xml_path).parents[1] / "onepagers" / Path(xml_path).name
+        if os.path.exists(backup_xml_path):
+            xml_path = str(backup_xml_path)
+        else:
+            print(f"[Warning] ALTO file or its backup not found: {xml_path}", file=sys.stderr)
+            return []
 
     if os.path.exists(txt_path):
         # print(f"[ALTO] Using recorded text file: {txt_path}", file=sys.stderr)
@@ -393,3 +397,94 @@ def classify_line(line: str, model_ft, model_ppl, tokenizer_ppl, spellers: dict,
     }
 
 
+
+
+# KER
+
+def lines_from_txt_file(file_path, encoding='utf-8'):
+    """
+    Loads lines of text from a plain text file.
+
+    :param file_path: Path to the alto file or a file-like object.
+
+    """
+    if type(file_path) is str:
+        f = codecs.open(file_path, 'r', encoding)
+    else:
+        f = codecs.getreader(encoding)(file_path)
+
+    content = [l.strip() for l in f]
+    f.close()
+    return content
+
+
+def lines_from_alto_file(file_path):
+    """
+    Loads lines of text from a provided alto file.
+
+    :param file_path: Path to the alto file or a file-like object.
+
+    """
+    try:
+        e = xml.etree.ElementTree.parse(file_path).getroot()
+    except xml.etree.ElementTree.ParseError as pe:
+        raise Exception("XML ParseError in {}: {}".format(file_path, pe))
+
+    layout = None
+
+    # Support for ALTO with and without namespaces
+    namespace = ''
+    if '}' in e.tag:
+        namespace = e.tag.split('}')[0] + '}'
+
+    for c in e:
+        if c.tag.endswith('Layout'):
+            layout = c
+            break
+    if layout is None:
+        raise Exception("XML is not ALTO file (does not contain layout object).")
+
+    text_lines = layout.findall(".//{}TextLine".format(namespace))
+
+    for text_line in text_lines:
+        line_words = []
+        for string in text_line:
+            if not string.tag.endswith('String'):
+                continue
+            if 'CONTENT' in string.attrib:
+                line_words.append(string.attrib['CONTENT'])
+        yield " ".join(line_words)
+
+
+def lines_from_zip_file(file_path):
+    """
+    Loads lines of text from a provided zip file. If it contains alto file, it
+    uses them, otherwise looks for txt files. Files can in an arbitrary depth.
+
+    :param file_path: Path to the uploaded zip file.
+    :type file_path: str
+
+    """
+    archive = zipfile.ZipFile(file_path)
+    alto_files = [n for n in archive.namelist() if n.endswith(".alto") or n.endswith(".xml")]
+    if alto_files:
+        for f_name in alto_files:
+            if f_name.startswith('__MACOSX') or f_name.endswith('/'): continue
+            try:
+                with archive.open(f_name) as f:
+                    for line in lines_from_alto_file(f):
+                        yield line
+            except Exception as e:
+                print("Error processing {} in zip: {}".format(f_name, e), file=sys.stderr)
+    else:
+        txt_files = [n for n in archive.namelist() if n.endswith(".txt")]
+        if not txt_files:
+            raise Exception("Archive contains neither alto files nor text files.")
+        for f_name in txt_files:
+            if f_name.startswith('__MACOSX') or f_name.endswith('/'): continue
+            try:
+                with archive.open(f_name) as f:
+                    for line in lines_from_txt_file(f):
+                        yield line
+            except Exception as e:
+                print("Error processing {} in zip: {}".format(f_name, e), file=sys.stderr)

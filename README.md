@@ -53,9 +53,51 @@ Which will start writing a CSV file line-by-line:
 The framework used for statistics and text contents extraction from XML files 
 is [alto-tools](https://github.com/cneud/alto-tools) and you can check its source code for more details.
 
+> [!NOTE]
+> The statistics table containing all pages from the collection is used as foundation for the further
+> processing steps.
+
+
+## Text classification of ALTO document's content in per-line manner
+
+Uses the [fastText language identification model](https://huggingface.co/facebook/fasttext-language-identification) plus autocorrection tools like [pyspellchecker](https://pypi.org/project/pyspellchecker/) and
+[autocorrect](https://github.com/filyp/autocorrect) Python libraries. 
+
+Noise from the OCR process is detected by perplexity measures from the causal language model [distilGPT2](https://huggingface.co/distilbert/distilgpt2).
+
+Script takes an input file of ALTO statistics without text contents (only paths to the xml files of pages).
+When processing a row from the input CSV, it extracts the text content of the page using [alto-tools](https://github.com/cneud/alto-tools), 
+and analyses it line-by-line.
+
+Each line can be classified as: 
+
+- **Clear** - High-confidence, low-perplexity, common language.
+- **Rough** - Medium-confidence, but still likely a common language.
+- **Noisy** - Low-confidence, high-perplexity, or other indicators of OCR issues.
+- **Trash** - Hard to guess language, very high perplexity, or non-prose (not plain text).
+- **Short** - Too few words to make a confident classification.
+- **Non-text** - Failed heuristic checks (e.g., mostly digits/symbols, very short).
+- **Empty** - Line contains only whitespace.
+- **N/A** -   Used internally for error cases or placeholders.
+
+At the end, counts of lines per category are aggregated for the whole page and saved into the output CSV.
+
+To run the script: 
+
+    python3 run_langID.py
+
+Which will take some time to finish, while results are saved on each 25th page, output tables are:
+    
+- `line_counts_<input.csv>` - counts of lines per category for each page, plus most common language pair
+- `lpages_classified_<input.csv>` - detailed classification results for each line of each page, contains predicted model scores and initial text corrections
+
+Tables covering the whole collection are saved next to the script, while raw text files and per-document 
+tabular results are recorded in `../PAGE-TXT/<file>` subdirectories and in `../PAGE-STAT` as separate CSV files named
+after the documents they describe.
+
 ## Get the text contents of pages into the stats CSV
 
-Now the previous output CSV becomes the input CSV:
+Now the statistics output CSV becomes the input CSV:
 
     ./addtext.sh input.csv
     
@@ -120,3 +162,27 @@ Which should start filling in the output directories with predicted files:
 
 The configuration of the used APIs is in the `text_api_calls.sh` script, the header variables for 
 output formats, default models, and other parameters are in the header.
+
+## KER keywords extraction based on tf-idf
+
+For the input directory containing subdirectories of `.alto.xml` (`alto`)  or `.txt` (`txt`) files 
+of separate pages, launch keywords extraction of Czech (`cs`) or English (`en`) documents:
+
+    python3 run_ker.py --dir <input_dir> --lang <lang> --max-words <integer> --file-format <file_format>
+
+Two tables will be created as a result of this process:
+
+ - `pages_keywords.tsv` - keywords per page in every input document
+ - `documents_keywords.tsv` - summarized keywords for each document from the input directory
+
+Columns of these tables are:
+
+ - `file` - document identifier
+ - `page` - page number (only in `pages_keywords.tsv`)
+ - `lang` - language basis of KER (English or Czech)
+ - `threshold` - The minimum value of tf-idf score of a term to be considered a keyword (0.2 by default)
+ - `keyword<N>` - the N-th keyword extracted from the page/document
+ - `score<N>` - the score of the N-th keyword extracted from the page/document
+
+The `N` value goes from 1 to the value of `--max-words` parameter (5 or 10 by default).
+
