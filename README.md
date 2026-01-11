@@ -200,24 +200,20 @@ header variables in the `text_api_calls.sh` script.
 
 ### ▶ Step 6: Extract Keywords (KER) based on tf-idf
 
-Finally, you can extract keywords 🔎 from your processed text. This script runs on a directory 
-of page-specific files, either `.alto.xml` or `.txt`.
+Finally, you can extract keywords 🔎 from your processed text. This script runs on a directory of subdirectories with
+page-specific files `.txt`.
 
-    python3 run_ker.py --dir <input_dir> --lang <lang> --max-words <integer> --file-format <file_format>
+    python3 keywords.py -i <input_dir> -l <lang> --max-words <integer> 
 
--   `--dir`: Input directory (e.g., your output from Step 1 or text files from Step 3).
+-   `--input_dir`: Input directory (e.g., your output from Step 1 or text files from Step 3).
 -   `--lang`: Language for KER (`cs` for Czech or `en` for English).
 -   `--max-words`: Number of keywords to extract.
--   `--file-format`: `alto` or `txt`.
 
-This process creates two `.tsv` tables:
+This process creates `.csv` table `keywords_master.csv`
 
-1.  `pages_keywords.tsv`: Keywords extracted per-page.
-2.  `documents_keywords.tsv`: Summarized keywords for each document.
+The columns include `file`, and pairs of `keyword<N>` and `score<N>`.
 
-The columns include `file`, `page` (for the per-page table), `lang`, `threshold`, and pairs of `keyword<N>` and `score<N>`.
-
-An example of the per-document summary is available in [documents_keywords.tsv](documents_keywords.tsv) 📎.
+An example of the summary is available in [keywords_master.csv](keywords_master.csv) 📎.
 
 ---
 
