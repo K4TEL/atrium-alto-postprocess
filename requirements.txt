@@ -2,3 +2,9 @@ fasttext
 pandas
 torch
 transformers
+regex
+ufal.morphodita
+python-magic
+autocorrect
+pyspellchecker
+configparser
