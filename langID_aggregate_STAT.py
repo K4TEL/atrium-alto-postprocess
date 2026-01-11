@@ -7,12 +7,17 @@ import pandas as pd
 from pathlib import Path
 from tqdm import tqdm
 
-RAW_LINES_CSV = "ALTO_raw_lines_classified.csv"
-OUTPUT_STATS = "ALTO_final_page_stats.csv"
-OUTPUT_DOC_DIR = "../PAGE_STAT"
-CHUNKSIZE = 100_000  # Number of rows to read per chunk
-
 def main():
+    # Initialize the parser
+    config = configparser.ConfigParser()
+    # Read the configuration file
+    config.read('config_langID.txt')
+
+    RAW_LINES_CSV = config.get('AGGREGATE', 'RAW_LINES_CSV')
+    OUTPUT_STATS = config.get('AGGREGATE', 'OUTPUT_STATS')
+    OUTPUT_DOC_DIR = config.get('AGGREGATE', 'OUTPUT_DOC_DIR')
+    CHUNKSIZE = config.getint('AGGREGATE', 'CHUNKSIZE')
+
     Path(OUTPUT_DOC_DIR).mkdir(parents=True, exist_ok=True)
 
     # We need to aggregate counts per (file, page)

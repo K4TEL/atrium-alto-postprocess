@@ -11,10 +11,6 @@ import sys
 from pathlib import Path
 from tqdm import tqdm
 
-INPUT_CSV = "alto_statistics.csv"
-OUTPUT_TEXT_DIR = "../PAGE_TXT"
-MAX_WORKERS = 16  # Adjust based on CPU cores (e.g., os.cpu_count())
-
 
 def extract_single_page(args):
     """Worker function to extract one page."""
@@ -50,6 +46,15 @@ def extract_single_page(args):
 
 
 def main():
+    # Initialize the parser
+    config = configparser.ConfigParser()
+    # Read the configuration file
+    config.read('config_langID.txt')
+
+    INPUT_CSV = config.get('EXTRACT', 'INPUT_CSV')
+    OUTPUT_TEXT_DIR = config.get('EXTRACT', 'OUTPUT_TEXT_DIR')
+    MAX_WORKERS = config.getint('EXTRACT', 'MAX_WORKERS')
+
     df = pd.read_csv(INPUT_CSV)
     print(f"Loaded {len(df)} pages to extract.")
 

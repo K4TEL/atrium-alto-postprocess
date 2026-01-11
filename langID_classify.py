@@ -14,12 +14,7 @@ from tqdm import tqdm
 from text_util import *  # Import updated utils
 
 # Config
-INPUT_CSV = "alto_statistics.csv"
-TEXT_DIR = "../PAGE_TXT"
-OUTPUT_LINES_LOG = "ALTO_raw_lines_classified.csv"
-BATCH_SIZE = 128  # Increased batch size (GPUs love large batches)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
 
 def load_models():
     print(f"Loading models on {DEVICE}...")
@@ -35,6 +30,16 @@ def load_models():
 
 
 def main():
+    # Initialize the parser
+    config = configparser.ConfigParser()
+    # Read the configuration file
+    config.read('config_langID.txt')
+
+    INPUT_CSV = config.get('CLASSIFY', 'INPUT_CSV')
+    TEXT_DIR = config.get('CLASSIFY', 'TEXT_DIR')
+    OUTPUT_LINES_LOG = config.get('CLASSIFY', 'OUTPUT_LINES_LOG')
+    BATCH_SIZE = config.getint('CLASSIFY', 'BATCH_SIZE')
+
     # 1. Setup
     Path(OUTPUT_LINES_LOG).parent.mkdir(parents=True, exist_ok=True)
     ft_model, ppl_model, ppl_tok, spellers = load_models()
