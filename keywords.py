@@ -1,424 +1,274 @@
 import os
 import csv
 import argparse
-import subprocess
 import sys
+import re
+import multiprocessing
+import shutil
 from pathlib import Path
-from multi_rake import Rake
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
+# Try to import multi_rake; handle missing dependency gracefully
+try:
+    from multi_rake import Rake
+except ImportError:
+    print("[Error] 'multi_rake' library not found. Please install it: pip install multi_rake", file=sys.stderr)
+    sys.exit(1)
+
+# --- Configuration for "One-pagers" ---
+# Regex to extract Document ID from filename in 'onepagers' folder.
+# Assumes format: "DocName_PageNum.txt" or "DocName_123.txt"
+ONEPAGER_DOC_REGEX = re.compile(r"^(.*)_[\d]+\.txt$")
 
 
-def get_text_from_alto(xml_path: str) -> list[str]:
-    """
-    (Unchanged)
-    Runs the 'alto-tools -t' command on a given ALTO XML file to extract
-    all text lines.
-
-    Args:
-        xml_path: The file path to the ALTO XML.
-
-    Returns:
-        A list of strings, where each string is a stripped text line.
-        Returns an empty list if the file is not found or 'alto-tools' fails.
-    """
-    if not os.path.exists(xml_path):
-        print(f"[Warning] ALTO file not found: {xml_path}", file=sys.stderr)
-        return []
-
-    cmd = ["alto-tools", "-t", xml_path]
+def get_text_from_file(file_path: str) -> list[str]:
+    """Reads a text file line by line."""
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', check=True)
-        
-        # --- FIX START ---
-        # Get all words as a single stream to handle line breaks issues
-        raw_text = result.stdout
-        words = raw_text.split()
-        cleaned_words = []
-        
-        skip_next = False
-        for i in range(len(words) - 1):
-            current_word = words[i]
-            next_word = words[i+1]
-            
-            # Check if the current word is a prefix of the next word
-            # (e.g., "staveb" is in "stavebreferát")
-            # We also check length to ensure it's a real duplication pattern
-            if len(next_word) > len(current_word) and next_word.startswith(current_word):
-                # This is likely the prefix; skip adding it
-                continue
-            
-            cleaned_words.append(current_word)
-        
-        # Don't forget the last word
-        if words:
-            cleaned_words.append(words[-1])
-            
-        # Reconstruct lines (or just return as list of strings if RAKE accepts it)
-        # Since RAKE expects text, we can join them back.
-        # However, your function returns list[str] (lines). 
-        # For simplicity, we can return the cleaned text as one "line" per processed chunk 
-        # or try to preserve original lines if possible. 
-        # Given RAKE processes text blocks, joining is usually fine.
-        
-        return [" ".join(cleaned_words)]
-    except subprocess.CalledProcessError as e:
-        print(f"[Error] alto-tools failed on {xml_path}: {e.stderr}", file=sys.stderr)
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            return [line.strip() for line in f if line.strip()]
+    except Exception:
         return []
-    except FileNotFoundError:
-        print("[Error] 'alto-tools' command not found.", file=sys.stderr)
-        print("Please ensure 'alto-tools' is installed and in your system's PATH.", file=sys.stderr)
-        sys.exit(1)
-    except Exception as e:
-        print(f"[Error] Unexpected error processing {xml_path}: {e}", file=sys.stderr)
-        return []
-        
-      
 
 
-def process_directory_in_chunks(directory_path: Path, lang: str, max_w_count: int, chunk_size: int):
+def process_document_task(task_data):
     """
-    (MODIFIED)
-    Reads all .xml files from a *single* directory, extracts text, and
-    processes the text in chunks of 'chunk_size' lines to manage memory.
-
-    Keywords from all chunks are aggregated and re-sorted to get the
-    top keywords for the *entire* directory.
-
-    Returns:
-        A list of (keyword, score) tuples, or None if no text is found.
+    Worker function to process a single document.
+    Args: task_data (tuple): (doc_id, file_paths, lang, max_w_count, chunk_size)
     """
-    if not directory_path.is_dir():
-        print(f"Error: Path '{directory_path}' is not a valid directory.")
-        return None
-
-    print(f"Processing .xml files in: {directory_path.resolve()}")
+    doc_id, file_paths, lang, max_words, chunk_size = task_data
 
     try:
-        rake = Rake(language_code=lang, max_words=max_w_count)
-    except Exception as e:
-        print(f"Error initializing Rake (language_code='{lang}'). Is this language supported? Error: {e}")
+        # Initialize RAKE locally per process
+        rake = Rake(language_code=lang, max_words=max_words)
+    except Exception:
         return None
 
+    aggregated_scores = defaultdict(float)
     current_lines = []
-    # Use defaultdict to easily aggregate scores
-    aggregated_keywords = defaultdict(float)
-    total_files = 0
-    total_lines = 0
 
-    for xml_file in directory_path.glob("*.xml"):
-        try:
-            lines = get_text_from_alto(str(xml_file))
-            if not lines:
-                # Requirement: Ignore empty files
-                print(f"Info: No text extracted from {xml_file.name}")
-                continue
+    # Sort files to maintain page order
+    sorted_files = sorted(file_paths)
 
-            current_lines.extend(lines)
-            total_files += 1
-            total_lines += len(lines)
+    for file_path in sorted_files:
+        lines = get_text_from_file(str(file_path))
+        if not lines:
+            continue
 
-            # Requirement: Process when chunk size is reached
-            if len(current_lines) >= chunk_size:
-                print(f"  ... processing chunk of {len(current_lines)} lines ...")
-                text_chunk = "\n".join(current_lines)
-                # Requirement: Don't save text permanently
-                current_lines = []
-                
-                keywords_with_scores = rake.apply(text_chunk)
-                
-                # Aggregate keywords
-                for kw, score in keywords_with_scores:
-                    aggregated_keywords[kw] += score
+        current_lines.extend(lines)
 
-        except Exception as e:
-            print(f"Warning: Could not process file {xml_file.name}. Error: {e}")
+        # Process in chunks
+        if len(current_lines) >= chunk_size:
+            text_chunk = " ".join(current_lines)
+            kw_scores = rake.apply(text_chunk)
+            for kw, score in kw_scores:
+                aggregated_scores[kw] += score
+            current_lines = []
 
-    # Process any remaining lines after the loop
+            # Process remaining lines
     if current_lines:
-        print(f"  ... processing final chunk of {len(current_lines)} lines ...")
-        text_chunk = "\n".join(current_lines)
-        keywords_with_scores = rake.apply(text_chunk)
-        for kw, score in keywords_with_scores:
-            aggregated_keywords[kw] += score
-    
-    if not aggregated_keywords:
-        print("No .xml files found or no text/keywords could be extracted.")
+        text_chunk = " ".join(current_lines)
+        kw_scores = rake.apply(text_chunk)
+        for kw, score in kw_scores:
+            aggregated_scores[kw] += score
+
+    if not aggregated_scores:
         return None
 
-    print(f"Extracted text from {total_files} file(s) ({total_lines} lines total).")
-
-    # Sort the aggregated keywords by score
-    sorted_keywords = sorted(aggregated_keywords.items(), key=lambda item: item[1], reverse=True)
-
-    print(f"\tExtracted top keywords:")
-    for kw, score in sorted_keywords[:5]:
-        print(f"\t - {kw} (Score: {score:.2f})")
-
-    return sorted_keywords
+    # Sort keywords by score
+    sorted_keywords = sorted(aggregated_scores.items(), key=lambda item: item[1], reverse=True)
+    return doc_id, sorted_keywords
 
 
-def write_csv_row(output_file: str, row: list):
-    """
-    Helper function to append a single row to a CSV file.
-    """
-    try:
-        # Requirement: Appending results
-        with open(output_file, 'a', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(row)
-    except Exception as e:
-        print(f"\nError appending to CSV file '{output_file}': {e}", file=sys.stderr)
-
-
-def create_csv_header(output_file: str, num_keywords: int, is_recursive: bool):
-    """
-    Creates/overwrites the output file and writes the CSV header.
-    """
-    header = ["folder_name" if is_recursive else "chunk_name"]
+def create_csv_header(output_file: str, num_keywords: int):
+    """Creates the output CSV file with the correct header."""
+    header = ["document_id"]
     for i in range(1, num_keywords + 1):
         header.extend([f"keyword{i}", f"score{i}"])
-    
+
+    with open(output_file, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+
+
+def write_csv_row(output_file: str, doc_id: str, keywords: list, num_keywords: int):
+    """Appends a result row to the CSV."""
+    row = [doc_id]
+    top_kws = keywords[:num_keywords]
+
+    for kw, score in top_kws:
+        row.extend([kw, f"{score:.2f}"])
+
+    # Pad with empty strings
+    missing = num_keywords - len(top_kws)
+    row.extend(["", ""] * missing)
+
+    with open(output_file, 'a', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(row)
+
+
+def sort_csv_file(csv_file: str):
+    """
+    Sorts the CSV file alphabetically by the first column (document_id).
+    Uses pandas if available for speed, otherwise falls back to a memory-efficient native sort.
+    """
+    print("--- Sorting Output CSV ---")
+
+    # Try using Pandas first (fastest)
     try:
-        with open(output_file, 'w', newline='', encoding='utf-8') as f:
+        import pandas as pd
+        print("Using Pandas for sorting...")
+        df = pd.read_csv(csv_file)
+        df.sort_values(by=df.columns[0], inplace=True)
+        df.to_csv(csv_file, index=False)
+        print("Sorting complete.")
+        return
+    except ImportError:
+        print("Pandas not found. Using native Python sort (slower for massive files)...")
+
+    # Native Python fallback (Memory efficient approach: read all, sort, write back)
+    # WARNING: For strictly "millions" of rows, you might want an external merge sort.
+    # Assuming the results file fits in RAM (usually fine for metadata even with 1M rows).
+
+    temp_file = csv_file + ".tmp"
+
+    try:
+        with open(csv_file, 'r', newline='', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            header = next(reader, None)
+            if not header:
+                return  # Empty file
+
+            # Read all rows into memory
+            rows = list(reader)
+
+        # Sort rows by first element (doc_id)
+        rows.sort(key=lambda x: x[0])
+
+        with open(temp_file, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow(header)
+            writer.writerows(rows)
+
+        shutil.move(temp_file, csv_file)
+        print("Sorting complete.")
+
     except Exception as e:
-        print(f"\nError writing CSV header to '{output_file}': {e}", file=sys.stderr)
-        return False
-    return True
+        print(f"Error during sorting: {e}")
+        if os.path.exists(temp_file):
+            os.remove(temp_file)
 
 
-def run_recursive_processing(base_dir: str, num_keywords: int, lang: str, max_w_count: int, output_file: str, chunk_size: int):
-    """
-    (MODIFIED)
-    Recursively processes subfolders. Results are *appended* to the
-    CSV file immediately after each subfolder is processed.
-    """
-    base_path = Path(base_dir)
-    if not base_path.is_dir():
-        print(f"Error: Base path '{base_dir}' is not a valid directory.")
-        return
-
-    # Create CSV file with header first
-    if not create_csv_header(output_file, num_keywords, is_recursive=True):
-        return
-
-    print(f"Starting recursive processing in: {base_path.resolve()}")
-    folders_processed = 0
-
-    for item in sorted(base_path.iterdir()):
-        if item.is_dir():
-            print(f"\n--- Processing Subfolder: {item.name} ---")
-
-            # Process this subfolder (which handles its own chunking)
-            keywords_with_scores = process_directory_in_chunks(
-                item, lang, max_w_count, chunk_size
-            )
-
-            # Requirement: empty files (folders) can be ignored entirely
-            if not keywords_with_scores:
-                print(f"No keywords found for {item.name}, skipping row.")
+def yield_document_tasks(input_dir: Path, lang: str, max_words: int, chunk_size: int):
+    """Generator that identifies documents and yields task data."""
+    # Use os.scandir for speed
+    with os.scandir(input_dir) as entries:
+        for entry in entries:
+            if not entry.is_dir():
                 continue
 
-            # Prepare the CSV row
-            row = [item.name]
-            keywords_to_add = keywords_with_scores[:num_keywords]
-            for keyword, score in keywords_to_add:
-                row.extend([keyword, f"{score:.2f}"])
+            dir_name = entry.name
+            dir_path = Path(entry.path)
 
-            # Pad the row if fewer than num_keywords were found
-            num_missing_cols = (num_keywords - len(keywords_to_add)) * 2
-            row.extend([""] * num_missing_cols)
-            
-            # Requirement: Appending results
-            write_csv_row(output_file, row)
-            folders_processed += 1
+            # CASE A: Special "onepagers" folder
+            if dir_name == "onepagers":
+                file_groups = defaultdict(list)
+                print(f"[Info] Scanning 'onepagers' directory: {dir_path}...")
 
-    print(f"\n--- Success! ---")
-    if folders_processed > 0:
-        print(f"Recursive processing complete. {folders_processed} folders saved to: {output_file}")
-    else:
-        print("No subfolders with keywords were found.")
+                with os.scandir(dir_path) as file_entries:
+                    for f_entry in file_entries:
+                        if f_entry.is_file() and f_entry.name.lower().endswith(".txt"):
+                            match = ONEPAGER_DOC_REGEX.match(f_entry.name)
+                            if match:
+                                doc_id = match.group(1)
+                                file_groups[doc_id].append(f_entry.path)
+                            else:
+                                doc_id = Path(f_entry.name).stem
+                                file_groups[doc_id].append(f_entry.path)
 
+                for doc_id, files in file_groups.items():
+                    yield (doc_id, files, lang, max_words, chunk_size)
 
-def run_standard_processing(base_dir: str, num_keywords: int, lang: str, max_w_count: int, output_file: str, chunk_size: int):
-    """
-    (NEW FUNCTION)
-    Processes all .xml files in a *single* directory in line-based chunks.
-    Each chunk's results are saved as a *separate row* in the CSV.
-    """
-    base_path = Path(base_dir)
-    if not base_path.is_dir():
-        print(f"Error: Base path '{base_dir}' is not a valid directory.")
-        return
-    
-    # Create CSV file with header first
-    if not create_csv_header(output_file, num_keywords, is_recursive=False):
-        return
-    
-    print(f"Starting standard processing in: {base_path.resolve()}")
+            # CASE B: Standard Document Folder
+            else:
+                files = []
+                with os.scandir(dir_path) as file_entries:
+                    for f_entry in file_entries:
+                        if f_entry.is_file() and f_entry.name.lower().endswith(".txt"):
+                            files.append(f_entry.path)
 
-    try:
-        rake = Rake(language_code=lang, max_words=max_w_count)
-    except Exception as e:
-        print(f"Error initializing Rake (language_code='{lang}'). Is this language supported? Error: {e}")
-        return
-
-    current_lines = []
-    chunk_num = 1
-    total_files = 0
-    chunks_saved = 0
-
-    for xml_file in sorted(base_path.glob("*.xml")):
-        try:
-            lines = get_text_from_alto(str(xml_file))
-            if not lines:
-                # Requirement: Ignore empty files
-                continue
-            
-            current_lines.extend(lines)
-            total_files += 1
-
-            # Requirement: Process when chunk size is reached
-            if len(current_lines) >= chunk_size:
-                print(f"  ... processing chunk {chunk_num} ({len(current_lines)} lines) ...")
-                text_chunk = "\n".join(current_lines)
-                # Requirement: Don't save text permanently
-                current_lines = []
-                
-                keywords_with_scores = rake.apply(text_chunk)
-                
-                if keywords_with_scores:
-                    row = [f"chunk_{chunk_num}"]
-                    keywords_to_add = keywords_with_scores[:num_keywords]
-                    for keyword, score in keywords_to_add:
-                        row.extend([keyword, f"{score:.2f}"])
-                    
-                    num_missing_cols = (num_keywords - len(keywords_to_add)) * 2
-                    row.extend([""] * num_missing_cols)
-                    
-                    # Requirement: Appending results
-                    write_csv_row(output_file, row)
-                    chunks_saved += 1
-                else:
-                    print(f"  ... no keywords found for chunk {chunk_num}.")
-
-                chunk_num += 1
-
-        except Exception as e:
-            print(f"Warning: Could not process file {xml_file.name}. Error: {e}")
-
-    # Process any remaining lines as the final chunk
-    if current_lines:
-        print(f"  ... processing final chunk {chunk_num} ({len(current_lines)} lines) ...")
-        text_chunk = "\n".join(current_lines)
-        keywords_with_scores = rake.apply(text_chunk)
-        
-        if keywords_with_scores:
-            row = [f"chunk_{chunk_num}"]
-            keywords_to_add = keywords_with_scores[:num_keywords]
-            for keyword, score in keywords_to_add:
-                row.extend([keyword, f"{score:.2f}"])
-            
-            num_missing_cols = (num_keywords - len(keywords_to_add)) * 2
-            row.extend([""] * num_missing_cols)
-            
-            write_csv_row(output_file, row)
-            chunks_saved += 1
-        else:
-            print(f"  ... no keywords found for final chunk {chunk_num}.")
-    
-    print(f"\n--- Success! ---")
-    if chunks_saved > 0:
-        print(f"Standard processing complete. {total_files} files processed.")
-        print(f"{chunks_saved} chunks saved to: {output_file}")
-    else:
-        print(f"{total_files} files processed, but no keywords were extracted.")
+                if files:
+                    yield (dir_name, files, lang, max_words, chunk_size)
 
 
 def main():
-    """
-    Main function to parse arguments and run the correct mode.
-    (Help text updated)
-    """
     parser = argparse.ArgumentParser(
-        description="Extract keywords from ALTO .xml files.",
-        formatter_class=argparse.RawTextHelpFormatter
+        description="Extract keywords from massive archives of .txt files.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
-    parser.add_argument(
-        "input_dir",
-        help="The input directory containing ALTO .xml files or subfolders to process."
-    )
-
-    parser.add_argument(
-        "-r", "--recursive",
-        action="store_true",
-        help="Process each subfolder within 'input_dir' individually.\n"
-             "Results are aggregated per subfolder and saved as one row per folder.\n"
-             "If not set, processes all .xml files *directly* within 'input_dir' as one batch,\n"
-             "saving results *per chunk* of lines."
-    )
-    
-    parser.add_argument(
-        "-c", "--chunk_size",
-        type=int,
-        default=5000,
-        help="Approximate number of text *lines* to process in one batch (default: 50000).\n"
-             "In recursive mode, chunks are aggregated per folder.\n"
-             "In standard mode, each chunk is saved as a new row."
-    )
-
-    parser.add_argument(
-        "-n", "--num_keywords",
-        type=int,
-        default=10,
-        help="Number of top keywords to extract per row (default: 10)."
-    )
-
-    parser.add_argument(
-        "-l", "--lang",
-        default="cs",
-        help="Language code for stopword list (e.g., 'en', 'cs', 'de') (default: 'cs')."
-    )
-
-    parser.add_argument(
-        "-w", "--max_words",
-        type=int,
-        default=2,
-        help="Maximum number of words per keyword (default: 2)."
-    )
-
-    parser.add_argument(
-        "-o", "--output_file",
-        default="keyword_results.csv",
-        help="Name of the output CSV file (default: 'keyword_results.csv')."
-    )
+    parser.add_argument("--input_dir", "-i", default="../PAGE_TXT", help="Root directory containing document folders.")
+    parser.add_argument("--workers", "-j", type=int, default=max(1, multiprocessing.cpu_count() - 1),
+                        help="Number of parallel worker processes.")
+    parser.add_argument("--chunk_size", "-c", type=int, default=10000,
+                        help="Number of lines to process in one memory batch per document.")
+    parser.add_argument("--num_keywords", "-n", type=int, default=10,
+                        help="Number of top keywords to save per document.")
+    parser.add_argument("--lang", "-l", default="cs", help="Language code (e.g., 'cs', 'en').")
+    parser.add_argument("--max_words", "-w", type=int, default=2, help="Maximum length (in words) of a keyword phrase.")
+    parser.add_argument("--output_file", "-o", default="keywords_master.csv", help="Output CSV file path.")
 
     args = parser.parse_args()
+    input_path = Path(args.input_dir)
 
-    if args.recursive:
-        # --- Recursive Mode ---
-        run_recursive_processing(
-            args.input_dir,
-            args.num_keywords,
-            args.lang,
-            args.max_words,
-            args.output_file,
-            args.chunk_size
+    if not input_path.exists():
+        print(f"Error: Directory '{input_path}' not found.")
+        sys.exit(1)
+
+    # Initialize CSV
+    create_csv_header(args.output_file, args.num_keywords)
+
+    print(f"--- Starting Processing ---")
+    print(f"Input: {input_path.resolve()}")
+    print(f"Workers: {args.workers}")
+
+    processed_count = 0
+
+    with ProcessPoolExecutor(max_workers=args.workers) as executor:
+        futures = {}
+
+        task_generator = yield_document_tasks(
+            input_path, args.lang, args.max_words, args.chunk_size
         )
-    else:
-        # --- Standard Mode (Non-Recursive) ---
-        run_standard_processing(
-            args.input_dir,
-            args.num_keywords,
-            args.lang,
-            args.max_words,
-            args.output_file,
-            args.chunk_size
-        )
+
+        for task in task_generator:
+            future = executor.submit(process_document_task, task)
+            futures[future] = task[0]
+
+        print(f"--- Processing submitted tasks... ---")
+
+        for future in as_completed(futures):
+            doc_id = futures[future]
+            try:
+                result = future.result()
+                if result:
+                    res_doc_id, keywords = result
+                    write_csv_row(args.output_file, res_doc_id, keywords, args.num_keywords)
+                    processed_count += 1
+
+                    if processed_count % 100 == 0:
+                        print(f"Processed {processed_count} documents...")
+            except Exception as e:
+                print(f"[Error] Failed processing document '{doc_id}': {e}")
+
+    print(f"\n--- Processing Complete. Sorting Results... ---")
+    sort_csv_file(args.output_file)
+
+    print(f"--- Done! ---")
+    print(f"Total documents processed: {processed_count}")
+    print(f"Results saved to: {args.output_file}")
 
 
 if __name__ == "__main__":
     main()
-
