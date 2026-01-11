@@ -89,11 +89,7 @@ autocorrection libraries ([pyspellchecker](https://pypi.org/project/pyspellcheck
 [autocorrect](https://github.com/filyp/autocorrect) 🔗), and perplexity scores 
 from [distilGPT2](https://huggingface.co/distilbert/distilgpt2) 😊 to detect noise.
 
-The script takes the statistics file from Step 2 (e.g., `output.csv`) as its input.
-
-    python3 run_langID.py
-
-As it processes, it aggregates line counts for each page into categories 🪧:
+As the script processes, it aggregates line counts for each page into categories 🪧:
 
 -   **Clear** - High-confidence, low-perplexity, common language.
 -   **Rough** - Medium-confidence, but still likely a common language.
@@ -104,10 +100,33 @@ As it processes, it aggregates line counts for each page into categories 🪧:
 -   **Empty** - Line contains only whitespace.
 -   **N/A** - Used internally for error cases.
 
-This script generates two primary output tables (results are saved every 25 pages):
 
-1.  `line_counts_<input.csv>`: Page-level summary of line counts per category.
-    - *Columns*:
+> [!NOTE]
+> This script generates two primary output tables (results are saved every 25 pages) 
+> `raw_lines_classified.csv` and `final_page_stats.csv`, while the
+> raw text files and per-document results are also saved in `../PAGE-TXT/` and `../PAGE-STAT/`.
+
+#### 3.1 Extract Text (CPU Bound)
+This script runs in parallel (using multiple **CPU** cores) to extract text from ALTO XMLs into `.txt` files. It reads the CSV from Step 2.
+
+    python3 langID_extract_TXT.py
+
+* **Input:** `output.csv` (from Step 2)
+* **Output:** `../PAGE_TXT/` (directory containing raw text files)
+
+#### 3.2 Classify Lines (GPU Bound)
+This script reads the extracted text files, batches lines together, and runs the FastText 
+and DistilGPT2 models on the **GPU**. It logs results immediately to a raw CSV to save memory.
+
+    python3 langID_classify.py
+
+* **Input:** `../PAGE_TXT/` and `output.csv`
+* **Output:** `raw_lines_classified.csv` (append-only log of every line)
+* **Note:** This script is resume-capable. If interrupted, run it again, and it will skip files already present in the log.
+
+
+`raw_lines_classified.csv>`: Page-level summary of line counts per category.
+   - *Columns*:
       - `file` - document identifier
       - `page` - page number
       - `textlines` - number of text lines on the ALTO page
@@ -123,10 +142,21 @@ This script generates two primary output tables (results are saved every 25 page
       - `rough_lines` - number of lines classified as **Rough**
       - `short_lines` - number of lines classified as **Short**
       - `languages` - most common language code pair among page lines (e.g., "eng-ces", "deu-other", "ces" etc.)
-    -   *Example*: [line_counts_test_alto_stats.csv](line_counts_test_alto_stats.csv) 📎
+   -   *Example*: [line_counts_test_alto_stats.csv](line_counts_test_alto_stats.csv) 📎
 
-2.  `pages_classified_<input.csv>`: Detailed classification results for *every single line*.
-    - *Columns*:
+
+#### 3.3 Aggregate Statistics (Memory Bound)
+This script processes the massive `raw_lines_classified.csv` in chunks to produce the 
+final page-level statistics and per-document splits (**CPU** can handle this).
+
+    python3 langID_aggregate_STAT.py
+
+* **Input:** `raw_lines_classified.csv`
+* **Output 1:** `final_page_stats.csv` (The input CSV augmented with line counts: `clear_lines`, `noisy_lines`, etc.)
+* **Output 2:** `../PAGE_STAT/` (Folder containing per-document CSVs)
+
+`final_page_stats.csv`: Detailed classification results for *every single line*.
+   - *Columns*:
       - `file` - document identifier
       - `page` - page number
       - `line` - line number on the ALTO page
@@ -139,9 +169,8 @@ This script generates two primary output tables (results are saved every 25 page
       - `perplexity_corrected` - perplexity score after autocorrection or from the whole page for a **Short** line
       - `category` - assigned category of the line (**Clear**, **Rough**, **Noisy**, **Trash**, **Short**, **Non-text**, **Empty**, **N/A**)
       - `corrected_text` - text of the line after autocorrection, but empty string if unchanged
-    -   *Example*: [pages_classified_test_alto_stats.csv](pages_classified_test_alto_stats.csv) 📎
+   -   *Example*: [pages_classified_test_alto_stats.csv](pages_classified_test_alto_stats.csv) 📎
 
-Raw text files and per-document results are also saved in `../PAGE-TXT/` and `../PAGE-STAT/`.
 
 ### ▶ Step 4: Add Full Text Content to Statistics CSV
 

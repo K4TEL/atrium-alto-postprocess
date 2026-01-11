@@ -35,6 +35,8 @@ from autocorrect import Speller
 from spellchecker import SpellChecker
 import concurrent.futures
 
+
+
 # --- Configuration ---
 COMMON_LANGS = ["ces", "deu", "eng"]  # Languages considered "common"
 
@@ -71,6 +73,100 @@ speller_per_language = {
         "lvs": (0, "lv"),
         "eus": (0, "eu")
     }
+
+
+
+
+def load_spellers():
+    """Pre-load all spellers once."""
+    spellers = {}
+    for common_lang in COMMON_LANGS:
+        speller_type, speller_lang = speller_per_language[common_lang]
+        if speller_type == 1:
+            spellers[common_lang] = Speller(speller_lang, only_replacements=True)
+        else:
+            spellers[common_lang] = SpellChecker(language=speller_lang)
+    return spellers
+
+
+
+
+
+def calculate_perplexity_batch(texts: list[str], model, tokenizer, device) -> list[float]:
+    """Optimized batch perplexity calculation."""
+    if not texts:
+        return []
+
+    try:
+        max_length = model.config.max_position_embeddings
+        tokenizer.pad_token = tokenizer.eos_token
+
+        # Tokenize batch
+        encodings = tokenizer(texts, return_tensors="pt", padding=True, truncation=True, max_length=max_length)
+        input_ids = encodings.input_ids.to(device)
+        attention_mask = encodings.attention_mask.to(device)
+
+        target_ids = input_ids.clone()
+        target_ids[target_ids == tokenizer.pad_token_id] = -100
+
+        with torch.no_grad():
+            outputs = model(input_ids, attention_mask=attention_mask, labels=target_ids)
+            logits = outputs.logits
+
+            # Vectorized loss calculation
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = target_ids[..., 1:].contiguous()
+            loss_fct = nn.CrossEntropyLoss(reduction='none')
+            loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+            loss = loss.view(target_ids.size(0), -1)
+
+            non_masked = (shift_labels != -100)
+            seq_loss = (loss * non_masked).sum(dim=1)
+            num_tokens = non_masked.sum(dim=1).clamp(min=1)
+
+            ppl = torch.exp(seq_loss / num_tokens)
+            return ppl.tolist()
+
+    except Exception as e:
+        print(f"[Error] Batch PPL: {e}", file=sys.stderr)
+        return [0.0] * len(texts)
+
+
+def autocorrect_line(text, lang_code, spellers):
+    """Wrapper for autocorrect logic."""
+    if not lang_code: return text
+
+    # Simple lookup for speller
+    base_lang = lang_code.split("_")[0]
+    if base_lang not in spellers: return text
+
+    speller = spellers[base_lang]
+    input_words = text.split(" ")
+
+    # (Implementation logic copied from original, simplified)
+    if hasattr(speller, 'get_candidates'):  # autocorrect library
+        return speller(text)
+    else:  # pyspellchecker
+        corrected = [speller.correction(w) or w if w not in speller else w for w in input_words]
+        return " ".join(corrected)
+
+
+def categorize_line(text, lang_code, score, ppl, corr_text, corr_score, corr_ppl):
+    """Pure logic function to determine category."""
+    # (Logic identical to original script, extracted for clarity)
+    if ppl >= PERPLEXITY_THRESHOLD_MAX and (corr_ppl == 0 or corr_ppl >= PERPLEXITY_THRESHOLD_MAX):
+        return "Trash"
+    if ppl >= PERPLEXITY_THRESHOLD_MIN and (corr_ppl == 0 or corr_ppl >= PERPLEXITY_THRESHOLD_MIN):
+        return "Noisy"
+
+    is_common = any(lang_code.startswith(cl) for cl in COMMON_LANGS)
+    if not is_common: return "Noisy"
+
+    if score > LANG_SCORE_CLEAR: return "Clear"
+    if score > LANG_SCORE_ROUGH: return "Rough"
+    return "Noisy"
+
+
 
 
 def process_page_batch(page_batch_rows: list, output_text_dir: str,
@@ -197,7 +293,29 @@ def process_page_batch(page_batch_rows: list, output_text_dir: str,
 
 
 # --- NEW HELPER FUNCTION FOR PRE-FILTERING ---
+
+
+
 def pre_filter_line(line: str) -> tuple[str, str]:
+    """Fast CPU heuristic to discard garbage before it hits the GPU."""
+    clean_text = line.strip()
+    if not clean_text:
+        return "Empty", ""
+
+    n_chars = len(clean_text)
+    unique_symbols = set(c for c in clean_text if not c.isspace())
+
+    # Fast check for very short or non-text content
+    if n_chars < 4 or len(unique_symbols) < 3:
+        return "Non-text", ""
+
+    letters = sum(c.isalpha() for c in clean_text)
+    if letters / n_chars < 0.3:  # Mostly symbols/numbers
+        return "Non-text", ""
+
+    return "Process", clean_text
+
+def pre_filter_line_OLD(line: str) -> tuple[str, str]:
     """
     Performs the initial, lightweight heuristic checks on a line.
 
@@ -418,7 +536,7 @@ def calculate_perplexity(text: str, model, tokenizer, device) -> float:
 
 
 # --- NEW: BATCH PERPLEXITY FUNCTION ---
-def calculate_perplexity_batch(texts: list[str], model, tokenizer, device) -> list[float]:
+def calculate_perplexity_batch_OLD(texts: list[str], model, tokenizer, device) -> list[float]:
     """
     (BATCH VERSION)
     Calculates the perplexity for a batch of text strings *at the same time*.
