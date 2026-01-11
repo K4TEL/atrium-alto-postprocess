@@ -33,6 +33,9 @@ def extract_single_page(args):
 
     # Run extraction (alto-tools)
     cmd = ["alto-tools", "-t", xml_path]
+    backup_xml_path = Path(xml_path).parents[1] / "onepagers" / Path(xml_path).name
+    if backup_xml_path.exists():
+        cmd = ["alto-tools", "-t", str(backup_xml_path)]
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8')
         if res.returncode == 0:
