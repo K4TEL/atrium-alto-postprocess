@@ -17,9 +17,9 @@ except ImportError:
     sys.exit(1)
 
 # --- Configuration for "One-pagers" ---
-# Regex to extract Document ID from filename in 'onepagers' folder.
-# Assumes format: "DocName_PageNum.txt" or "DocName_123.txt"
-ONEPAGER_DOC_REGEX = re.compile(r"^(.*)_[\d]+\.txt$")
+# Regex to extract Document ID from filename stem.
+# Pattern: (Group 1: DocName) [separator - or _] (Group 2: PageNum) at end of string
+ONEPAGER_DOC_REGEX = re.compile(r"(.*)[-_](\d+)$")
 
 
 def get_text_from_file(file_path: str) -> list[str]:
@@ -179,13 +179,17 @@ def yield_document_tasks(input_dir: Path, lang: str, max_words: int, chunk_size:
                 with os.scandir(dir_path) as file_entries:
                     for f_entry in file_entries:
                         if f_entry.is_file() and f_entry.name.lower().endswith(".txt"):
-                            match = ONEPAGER_DOC_REGEX.match(f_entry.name)
+                            # Apply regex logic on the file stem (filename without extension)
+                            file_stem = Path(f_entry.name).stem
+                            match = ONEPAGER_DOC_REGEX.match(file_stem)
+
                             if match:
                                 doc_id = match.group(1)
-                                file_groups[doc_id].append(f_entry.path)
                             else:
-                                doc_id = Path(f_entry.name).stem
-                                file_groups[doc_id].append(f_entry.path)
+                                # Fallback: use the whole stem as doc_id if pattern doesn't match
+                                doc_id = file_stem
+
+                            file_groups[doc_id].append(f_entry.path)
 
                 for doc_id, files in file_groups.items():
                     yield (doc_id, files, lang, max_words, chunk_size)
@@ -200,7 +204,6 @@ def yield_document_tasks(input_dir: Path, lang: str, max_words: int, chunk_size:
 
                 if files:
                     yield (dir_name, files, lang, max_words, chunk_size)
-
 
 def main():
     parser = argparse.ArgumentParser(
