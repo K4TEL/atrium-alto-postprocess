@@ -163,18 +163,7 @@ final page-level statistics and per-document splits (**CPU** can handle this).
    -   *Example*: [final_page_stats.csv](final_page_stats.csv) 📎
 
 
-### ▶ Step 4: Add Full Text Content to Statistics CSV
-
-After classification, you may want a CSV that includes the full, concatenated text for pages 
-deemed high-quality (or all pages). This script adds text content directly into your 
-statistics CSV.
-
-    ./addtext.sh input.csv
-
-This will take `input.csv` (e.g., your `line_counts_...csv` from Step 3), replace 
-the `path` column with a new `text` column, and save the result as `input_with_text.csv`.
-
-### ▶ Step 5: Extract NER and CONLL-U
+### ▶ Step 4: Extract NER and CONLL-U
 
 This stage performs advanced NLP analysis using external APIs (Lindat/CLARIAH-CZ) to generate Universal Dependencies (CoNLL-U) and Named Entity Recognition (NER) data.
 
@@ -260,7 +249,7 @@ AND
     └── summary_ne_counts.csv  # Table of top entities per document
 ```
 
-### ▶ Step 6: Extract Keywords (KER) based on tf-idf
+### ▶ Step 5: Extract Keywords (KER) based on tf-idf
 
 Finally, you can extract keywords 🔎 from your processed text. This script runs on a directory of subdirectories with
 page-specific files `.txt`.
