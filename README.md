@@ -169,9 +169,9 @@ This stage performs advanced NLP analysis using external APIs (Lindat/CLARIAH-CZ
 
 Unlike previous steps, this process is split into modular shell scripts to handle large-scale processing, text chunking, and API rate limiting.
 
-#### 5.1 Configuration ⚙️
+#### Configuration ⚙️
 
-Before running the pipeline, review the `api_config.env` file. This file controls directory paths, API endpoints, and model selection.
+Before running the pipeline, review the [api_config.env](api_config.env) 📎 file. This file controls directory paths, API endpoints, and model selection.
 ```bash
 # Example settings in api_config.env
 INPUT_DIR="../PAGE_TXT"        # Source of text files (from Step 3.1)
@@ -181,9 +181,9 @@ MODEL_NAMETAG="nametag3-czech-cnec2.0-240830"
 WORD_CHUNK_LIMIT=900           # Word limit per API call
 ```
 
-#### 5.2 Execution Pipeline
+#### Execution Pipeline
 
-Run the following scripts in sequence. Each script utilizes [api_common.sh](api_util/api_common.sh) for logging, retry logic, and error handling.
+Run the following scripts in sequence. Each script utilizes [api_common.sh](api_util/api_common.sh) 📎 for logging, retry logic, and error handling.
 
 ##### I. Generate Manifest
 
@@ -197,7 +197,8 @@ Maps input text files to document IDs and page numbers to ensure correct process
 
 ##### II. UDPipe Processing (Morphology & Syntax)
 
-Sends text to the UDPipe API. Large pages are automatically split into chunks (default 900 words) using [chunk.py](api_util/chunk.py) to respect API limits, then merged back into valid CoNLL-U files.
+Sends text to the UDPipe API. Large pages are automatically split into chunks (default 900 words) using 
+[chunk.py](api_util/chunk.py) 📎 to respect API limits, then merged back into valid CoNLL-U files.
 ```bash
 ./api_udp.sh
 ```
@@ -216,7 +217,8 @@ Takes the valid CoNLL-U files and passes them through the NameTag API to annotat
 
 ##### IV. Generate Statistics
 
-Aggregates the entity counts from the final CoNLL-U files into a summary CSV. It utilizes [analyze.py](api_util/analyze.py) to map complex 
+Aggregates the entity counts from the final CoNLL-U files into a summary CSV. It utilizes 
+[analyze.py](api_util/analyze.py) 📎 to map complex 
 CNEC 2.0 tags (e.g., `g`, `pf`, `if`) into human-readable categories (e.g., "Geographical name", "First name", "Company/Firm").
 
 ```bash
@@ -225,7 +227,9 @@ CNEC 2.0 tags (e.g., `g`, `pf`, `if`) into human-readable categories (e.g., "Geo
 
 * **Output:** `OUTPUT_DIR/STATS/summary_ne_counts.csv`.
 
-#### 5.3 Output Structure
+Example: [summary_ne_counts.csv](summary_ne_counts.csv) 📎.
+
+#### Output Structure
 
 After completing the pipeline, your output directory will be organized as follows:
 ```
