@@ -92,14 +92,10 @@ from [distilGPT2](https://huggingface.co/distilbert/distilgpt2) 😊 to detect n
 As the script processes, it aggregates line counts for each page into categories 🪧:
 
 -   **Clear** - High-confidence, low-perplexity, common language.
--   **Rough** - Medium-confidence, but still likely a common language.
--   **Noisy** - Low-confidence, high-perplexity, or other OCR issues.
+-   **Noisy (Rough)** - Medium or Low-confidence, high-perplexity, or other OCR issues.
 -   **Trash** - Hard to guess language, very high perplexity, or non-prose. 
--   **Short** - Too few words to classify confidently.
 -   **Non-text** - Failed heuristic checks (e.g., mostly digits/symbols).
 -   **Empty** - Line contains only whitespace.
--   **N/A** - Used internally for error cases.
-
 
 > [!NOTE]
 > This script generates two primary output tables (results are saved every 25 pages) 
