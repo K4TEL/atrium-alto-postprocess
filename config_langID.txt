@@ -6,11 +6,11 @@ MAX_WORKERS = 16
 [CLASSIFY]
 INPUT_CSV = alto_statistics.csv
 TEXT_DIR = ../PAGE_TXT
-OUTPUT_LINES_LOG = raw_lines_classified.csv
+OUTPUT_LINES_LOG = classified_doc_lines
 BATCH_SIZE = 128
 
 [AGGREGATE]
-RAW_LINES_CSV = raw_lines_classified.csv
+RAW_LINES_CSV = classified_doc_lines
 OUTPUT_STATS = final_page_stats.csv
 OUTPUT_DOC_DIR = ../PAGE_STAT
 CHUNKSIZE = 100_000

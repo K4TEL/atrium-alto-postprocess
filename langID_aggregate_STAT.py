@@ -1,68 +1,92 @@
 #!/usr/bin/env python3
 """
 3_aggregate.py
-Step 3: Aggregate raw lines into page statistics and split per document.
+Step 3: Aggregate raw lines into page statistics.
+Reads a directory of per-document CSVs and compiles final stats.
 """
 import pandas as pd
 from pathlib import Path
 from tqdm import tqdm
 import configparser
+import sys
+
 
 def main():
     # Initialize the parser
     config = configparser.ConfigParser()
-    # Read the configuration file
     config.read('config_langID.txt')
 
-    RAW_LINES_CSV = config.get('AGGREGATE', 'RAW_LINES_CSV')
+    # This is now treated as a Directory containing {file_id}.csv files
+    INPUT_DIR_PATH = config.get('AGGREGATE', 'RAW_LINES_CSV')
     OUTPUT_STATS = config.get('AGGREGATE', 'OUTPUT_STATS')
     OUTPUT_DOC_DIR = config.get('AGGREGATE', 'OUTPUT_DOC_DIR')
-    CHUNKSIZE = config.getint('AGGREGATE', 'CHUNKSIZE')
+
+    # 1. Setup paths
+    input_dir = Path(INPUT_DIR_PATH)
+    if not input_dir.exists():
+        print(f"Error: Input directory {input_dir} does not exist.")
+        sys.exit(1)
 
     Path(OUTPUT_DOC_DIR).mkdir(parents=True, exist_ok=True)
 
-    # We need to aggregate counts per (file, page)
-    # Since the input is sorted/grouped by file processing order, we can stream it.
+    print(f"Reading CSV files from {input_dir}...")
 
-    print(f"Reading {RAW_LINES_CSV} in chunks...")
+    # Get list of all csv files in the input directory
+    csv_files = list(input_dir.glob("*.csv"))
 
-    # Initialize global stats collector (be careful with memory here)
-    # If dataset is truly massive, use Dask. For < 50M rows, chunking is usually fine.
+    if not csv_files:
+        print("No CSV files found in the directory.")
+        sys.exit(0)
 
-    page_stats_list = []
+    all_page_stats = []
 
-    for chunk in tqdm(pd.read_csv(RAW_LINES_CSV, chunksize=CHUNKSIZE)):
-        # 1. Pivot / Groupby on the chunk
-        # Note: This assumes a page's lines don't span across chunks.
-        # Since we write sequentially in Step 2, this is mostly safe,
-        # but robust code handles edge cases.
+    # 2. Iterate through each document file
+    for csv_file in tqdm(csv_files):
+        try:
+            # Read individual document CSV
+            # Expected columns: "file", "page_num", "line_num", "text", "lang", "lang_score", "perplex", "categ"
+            df = pd.read_csv(csv_file)
 
-        stats = chunk.groupby(['file', 'page'])['cat'].value_counts().unstack(fill_value=0)
-        stats.reset_index(inplace=True)
+            # Check for empty dataframe or missing columns
+            if df.empty or 'categ' not in df.columns:
+                continue
 
-        # Add missing columns if they didn't appear in this chunk
-        for col in ["Clear", "Trash", "Noisy", "Empty", "Non-text"]:
-            if col not in stats.columns:
-                stats[col] = 0
+            # 3. Aggregate Stats for this document
+            # Group by file and page_num, then count the categories
+            stats = df.groupby(['file', 'page_num'])['categ'].value_counts().unstack(fill_value=0)
 
-        # Save page stats
-        page_stats_list.append(stats)
+            # Ensure standard columns exist even if count is 0
+            standard_cols = ["Clear", "Trash", "Noisy", "Empty", "Non-text"]
+            for col in standard_cols:
+                if col not in stats.columns:
+                    stats[col] = 0
 
-        # 2. Split into per-document files immediately (optional)
-        # Group by file and append to CSVs in OUTPUT_DOC_DIR
-        for file_id, group in chunk.groupby('file'):
-            doc_path = Path(OUTPUT_DOC_DIR) / f"lines_{file_id}.csv"
-            header = not doc_path.exists()
-            group.to_csv(doc_path, mode='a', index=False, header=header)
+            # Reorder columns for consistency
+            stats = stats[standard_cols]
+            stats.reset_index(inplace=True)
 
-    # Combine all page stats
-    print("Consolidating page stats...")
-    final_df = pd.concat(page_stats_list)
-    # Group again in case a page was split across chunks
-    final_df = final_df.groupby(['file', 'page']).sum().reset_index()
+            # 4. Save per-document STATS (Optional but useful replacement for the old logic)
+            # This saves stats_docName.csv to OUTPUT_DOC_DIR
+            stats_out_path = Path(OUTPUT_DOC_DIR) / f"stats_{csv_file.name}"
+            stats.to_csv(stats_out_path, index=False)
 
-    final_df.to_csv(OUTPUT_STATS, index=False)
-    print(f"Done. Stats saved to {OUTPUT_STATS}")
+            # Collect for the final summary
+            all_page_stats.append(stats)
+
+        except Exception as e:
+            print(f"Error processing file {csv_file.name}: {e}")
+
+    # 5. Consolidate all page stats
+    if all_page_stats:
+        print("Consolidating final page stats...")
+        final_df = pd.concat(all_page_stats, ignore_index=True)
+
+        # Save global stats
+        final_df.to_csv(OUTPUT_STATS, index=False)
+        print(f"Done. Global stats saved to {OUTPUT_STATS}")
+        print(f"Per-document stats saved to {OUTPUT_DOC_DIR}")
+    else:
+        print("No statistics were generated.")
 
 
 if __name__ == "__main__":

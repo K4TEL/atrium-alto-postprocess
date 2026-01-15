@@ -236,6 +236,35 @@ def lines_from_zip_file(file_path):
             except Exception as e:
                 print("Error processing {} in zip: {}".format(f_name, e), file=sys.stderr)
 
+def categorize_line(lang_code, score, ppl):
+    """Pure logic function to determine category."""
+    # (Logic identical to original script, extracted for clarity)
+    if ppl >= PERPLEXITY_THRESHOLD_MAX:
+        return "Trash"
+    if ppl >= PERPLEXITY_THRESHOLD_MIN:
+        return "Noisy"
+
+    is_common = any(lang_code.startswith(cl) for cl in COMMON_LANGS)
+    if not is_common: return "Noisy"
+
+    if score > LANG_SCORE_CLEAR: return "Clear"
+    if score > LANG_SCORE_ROUGH: return "Noisy"
+    return "Noisy"
+
+# def categorize_line(text, lang_code, score, ppl, corr_text, corr_score, corr_ppl):
+#     """Pure logic function to determine category."""
+#     # (Logic identical to original script, extracted for clarity)
+#     if ppl >= PERPLEXITY_THRESHOLD_MAX and (corr_ppl == 0 or corr_ppl >= PERPLEXITY_THRESHOLD_MAX):
+#         return "Trash"
+#     if ppl >= PERPLEXITY_THRESHOLD_MIN and (corr_ppl == 0 or corr_ppl >= PERPLEXITY_THRESHOLD_MIN):
+#         return "Noisy"
+#
+#     is_common = any(lang_code.startswith(cl) for cl in COMMON_LANGS)
+#     if not is_common: return "Noisy"
+#
+#     if score > LANG_SCORE_CLEAR: return "Clear"
+#     if score > LANG_SCORE_ROUGH: return "Noisy"
+#     return "Noisy"
 
 
 # def autocorrect_line(text, lang_code, spellers):
@@ -257,20 +286,7 @@ def lines_from_zip_file(file_path):
 #         return " ".join(corrected)
 
 
-# def categorize_line(text, lang_code, score, ppl, corr_text, corr_score, corr_ppl):
-#     """Pure logic function to determine category."""
-#     # (Logic identical to original script, extracted for clarity)
-#     if ppl >= PERPLEXITY_THRESHOLD_MAX and (corr_ppl == 0 or corr_ppl >= PERPLEXITY_THRESHOLD_MAX):
-#         return "Trash"
-#     if ppl >= PERPLEXITY_THRESHOLD_MIN and (corr_ppl == 0 or corr_ppl >= PERPLEXITY_THRESHOLD_MIN):
-#         return "Noisy"
-#
-#     is_common = any(lang_code.startswith(cl) for cl in COMMON_LANGS)
-#     if not is_common: return "Noisy"
-#
-#     if score > LANG_SCORE_CLEAR: return "Clear"
-#     if score > LANG_SCORE_ROUGH: return "Noisy"
-#     return "Noisy"
+
 
 
 

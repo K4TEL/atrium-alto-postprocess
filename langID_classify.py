@@ -2,6 +2,7 @@
 """
 2_classify.py
 Step 2: Read TXT files, Batch, Classify on GPU.
+Output: Individual CSV files per document.
 """
 import pandas as pd
 import torch
@@ -11,10 +12,13 @@ from pathlib import Path
 import csv
 import sys
 from tqdm import tqdm
+from itertools import groupby
+import configparser
 from text_util import *  # Import updated utils
 
 # Config
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
 
 def load_models():
     print(f"Loading models on {DEVICE}...")
@@ -29,111 +33,149 @@ def load_models():
     return ft, model, tokenizer, spellers
 
 
+def write_rows_to_doc(output_dir, file_id, rows):
+    """
+    Appends rows to the specific document CSV.
+    Creates the file and writes header if it doesn't exist.
+    """
+    out_path = Path(output_dir) / f"{file_id}.csv"
+    file_exists = out_path.exists()
+
+    with open(out_path, 'a', encoding='utf-8', newline='') as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            # User specified header
+            writer.writerow(["file", "page_num", "line_num", "text", "lang", "lang_score", "perplex", "categ"])
+        writer.writerows(rows)
+
+
 def main():
     # Initialize the parser
     config = configparser.ConfigParser()
-    # Read the configuration file
     config.read('config_langID.txt')
 
     INPUT_CSV = config.get('CLASSIFY', 'INPUT_CSV')
     TEXT_DIR = config.get('CLASSIFY', 'TEXT_DIR')
-    OUTPUT_LINES_LOG = config.get('CLASSIFY', 'OUTPUT_LINES_LOG')
+    OUTPUT_DIR = config.get('CLASSIFY', 'OUTPUT_LINES_LOG')
     BATCH_SIZE = config.getint('CLASSIFY', 'BATCH_SIZE')
 
     # 1. Setup
-    Path(OUTPUT_LINES_LOG).parent.mkdir(parents=True, exist_ok=True)
+    out_dir_path = Path(OUTPUT_DIR)
+    out_dir_path.mkdir(parents=True, exist_ok=True)
+
     ft_model, ppl_model, ppl_tok, spellers = load_models()
 
-    # 2. Check work already done (Resume capability)
-    processed_keys = set()
-    if Path(OUTPUT_LINES_LOG).exists():
-        try:
-            # Read just the file/page columns to skip done work
-            existing = pd.read_csv(OUTPUT_LINES_LOG, usecols=['file', 'page'])
-            processed_keys = set(zip(existing['file'].astype(str), existing['page'].astype(str)))
-            print(f"Resuming: Found {len(processed_keys)} pages already processed.")
-        except Exception:
-            print("Could not read existing log, starting fresh or appending blindly.")
+    # 2. Read Input List
+    df = pd.read_csv(INPUT_CSV)
 
-    # 3. Open Output Stream
-    write_header = not Path(OUTPUT_LINES_LOG).exists()
+    # Batch Accumulators
+    batch_lines = []
+    batch_meta = []  # Stores (file_id, page_id, line_num, original_text)
 
-    with open(OUTPUT_LINES_LOG, 'a', encoding='utf-8', newline='') as f_out:
-        writer = csv.writer(f_out)
-        if write_header:
-            writer.writerow(["file", "page", "line_num", "text", "lang", "score", "ppl", "cat"])
+    # State for Rerun/Skip Logic
+    current_file_id = None
+    skipping_current_file = False
 
-        # 4. Read Input List
-        df = pd.read_csv(INPUT_CSV)
+    # Track files we have started working on in *this* execution session
+    # This ensures we don't skip files we just created a few seconds ago if the input dataframe is unsorted.
+    session_files = set()
 
-        # Batch Accumulators
-        batch_lines = []
-        batch_meta = []  # Stores (file_id, page_id, line_num, original_text)
+    print(f"Starting classification loop. Outputting to {OUTPUT_DIR}/...")
+    print("Files with existing CSV outputs will be skipped.")
 
-        print("Starting classification loop...")
-        for _, row in tqdm(df.iterrows(), total=len(df)):
-            file_id = str(row['file'])
-            page_id = str(row['page'])
+    for _, row in tqdm(df.iterrows(), total=len(df)):
+        file_id = str(row['file'])
+        page_id = str(row['page'])
 
-            if (file_id, page_id) in processed_keys:
+        # 3. Check Skip Logic (Per File)
+        if file_id != current_file_id:
+            current_file_id = file_id
+
+            out_path = out_dir_path / f"{file_id}.csv"
+
+            # If file exists on disk AND we haven't touched it in this session -> Skip it (Old run)
+            if out_path.exists() and file_id not in session_files:
+                skipping_current_file = True
+            else:
+                skipping_current_file = False
+                session_files.add(file_id)
+
+        if skipping_current_file:
+            continue
+
+        # 4. Process File
+        txt_path = Path(TEXT_DIR) / file_id / f"{file_id}-{page_id}.txt"
+        if not txt_path.exists():
+            continue
+
+        # Read text
+        with open(txt_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+        for i, line in enumerate(lines, 1):
+            clean_line = line.strip()
+            # Filter locally
+            cat, clean = pre_filter_line(line)
+
+            if cat != "Process":
+                # Write non-process lines immediately (no GPU needed)
+                # Row format: "file", "page_num", "line_num", "text", "lang", "lang_score", "perplex", "categ"
+                row_data = [file_id, page_id, i, clean_line, "N/A", 0, 0, cat]
+                write_rows_to_doc(out_dir_path, file_id, [row_data])
                 continue
 
-            txt_path = Path(TEXT_DIR) / file_id / f"{file_id}-{page_id}.txt"
-            if not txt_path.exists():
-                continue  # Skip missing files
+            batch_lines.append(clean)
+            batch_meta.append((file_id, page_id, i, clean_line))
 
-            # Read text
-            with open(txt_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
+            # PROCESS BATCH
+            if len(batch_lines) >= BATCH_SIZE:
+                process_and_write_batch(batch_lines, batch_meta, out_dir_path, ft_model, ppl_model, ppl_tok)
+                batch_lines = []
+                batch_meta = []
 
-            for i, line in enumerate(lines, 1):
-                # Filter locally
-                cat, clean = pre_filter_line(line)
-                if cat != "Process":
-                    # Write non-process lines immediately (no GPU needed)
-                    writer.writerow([file_id, page_id, i, line.strip(), "N/A", 0, 0, cat, ""])
-                    continue
-
-                batch_lines.append(clean)
-                batch_meta.append((file_id, page_id, i, line.strip()))
-
-                # PROCESS BATCH
-                if len(batch_lines) >= BATCH_SIZE:
-                    run_batch(batch_lines, batch_meta, writer, ft_model, ppl_model, ppl_tok, spellers)
-                    batch_lines = []
-                    batch_meta = []
-
-        # Final Batch
-        if batch_lines:
-            run_batch(batch_lines, batch_meta, writer, ft_model, ppl_model, ppl_tok, spellers)
+    # Final Batch
+    if batch_lines:
+        process_and_write_batch(batch_lines, batch_meta, out_dir_path, ft_model, ppl_model, ppl_tok)
 
 
-def run_batch(lines, meta, writer, ft, ppl_model, tokenizer, spellers):
-    # 1. PPL (Original)
+def process_and_write_batch(lines, meta, out_dir, ft, ppl_model, tokenizer):
+    """
+    Runs models on the batch, matches results to metadata,
+    groups by file_id, and writes to corresponding CSVs.
+    """
+    # 1. PPL
     ppls = calculate_perplexity_batch(lines, ppl_model, tokenizer, DEVICE)
 
-    # 2. FastText (Original)
+    # 2. FastText
     labels, scores = ft.predict(lines, k=1)
     langs = [l[0].replace("__label__", "") for l in labels]
     scores = [s[0] for s in scores]
 
-    # 3. Correction & Re-Check (Logic simplified for brevity)
-    # Ideally, you gather corrections and batch-run PPL again.
-    # For speed, you might skip correction PPL if original is "Good Enough".
+    # 3. Aggregate Results
+    results = []
+    for i in range(len(lines)):
+        file_id, page_id, line_num, original_text = meta[i]
 
-    # Here we do a simple sequential correct + heuristic for the example
-    for i, txt in enumerate(lines):
-        # ... logic to correct text ...
-        # If strict batching is needed for correction PPL, collect them into a new list here
-        # and run calculate_perplexity_batch again.
+        # Format: "file", "page_num", "line_num", "text", "lang", "lang_score", "perplex", "categ"
+        row = [
+            file_id,
+            page_id,
+            line_num,
+            original_text,
+            langs[i],
+            f"{scores[i]:.4f}",
+            f"{ppls[i]:.2f}",
+            categorize_line(langs[i], scores[i], ppls[i])
+        ]
+        results.append(row)
 
-        # Placeholder for writing result
-        writer.writerow([
-            meta[i][0], meta[i][1], meta[i][2], meta[i][3],
-            langs[i], f"{scores[i]:.4f}", f"{ppls[i]:.2f}",
-            "Clear",  # Replace with actual categorize_line call
-            ""
-        ])
+    # 4. Group by file_id and write
+    # Sort by file_id first required for groupby
+    results.sort(key=lambda x: x[0])
+
+    for file_id, group in groupby(results, key=lambda x: x[0]):
+        rows_for_file = list(group)
+        write_rows_to_doc(out_dir, file_id, rows_for_file)
 
 
 if __name__ == "__main__":
