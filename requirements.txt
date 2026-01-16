@@ -1,10 +1,7 @@
 fasttext
+multi_rake
 pandas
+pillow
 torch
+tqdm
 transformers
-regex
-ufal.morphodita
-python-magic
-autocorrect
-pyspellchecker
-configparser

@@ -31,8 +31,6 @@ import subprocess
 import os
 import csv
 from pathlib import Path
-from autocorrect import Speller
-from spellchecker import SpellChecker
 import concurrent.futures
 import configparser
 

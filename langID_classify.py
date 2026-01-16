@@ -14,7 +14,7 @@ import sys
 from tqdm import tqdm
 from itertools import groupby
 import configparser
-from text_util import *  # Import updated utils
+from text_util_langID import *  # Import updated utils
 
 # Config
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"

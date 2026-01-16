@@ -79,15 +79,23 @@ The extraction is powered by the [alto-tools](https://github.com/cneud/alto-tool
 > This statistics table is the basis for subsequent processing steps.
 > An example is available in [test_alto_stats.csv](test_alto_stats.csv) 📎.
 
-### ▶ Step 3: Classify Page Text Quality & Language
+### ▶ Step 3: Extract text from ALTO XML
+
+This script runs in parallel (using multiple **CPU** cores) to extract text from ALTO XMLs into `.txt` files. 
+It reads the CSV from Step 2.
+
+    python3 extract_ALTO_2_TXT.py
+
+* **Input:** `output.csv` (from Step 2)
+* **Output:** `../PAGE_TXT/` (directory containing raw text files)
+
+### ▶ Step 4: Classify Page Text Quality & Language
 
 This is a key ⌛ time-consuming step that analyzes the text quality of each page, 
 line-by-line, counting lines of defined types, to filter out OCR noise.
 
-It uses the [FastText language identification model](https://huggingface.co/facebook/fasttext-language-identification) 😊, 
-autocorrection libraries ([pyspellchecker](https://pypi.org/project/pyspellchecker/) 🔗,
-[autocorrect](https://github.com/filyp/autocorrect) 🔗), and perplexity scores 
-from [distilGPT2](https://huggingface.co/distilbert/distilgpt2) 😊 to detect noise.
+It uses the [FastText language identification model](https://huggingface.co/facebook/fasttext-language-identification) 😊 
+and perplexity scores from [distilGPT2](https://huggingface.co/distilbert/distilgpt2) 😊 to detect noise.
 
 As the script processes, it aggregates line counts for each page into categories 🪧:
 
@@ -105,15 +113,7 @@ As the script processes, it aggregates line counts for each page into categories
 All of the input-output files and chamgable parameters are available in [config_langID.txt](config_langID.txt) 📎 where 
 here Step 3 is split into three stages:
 
-#### 3.1 Extract Text (CPU Bound)
-This script runs in parallel (using multiple **CPU** cores) to extract text from ALTO XMLs into `.txt` files. It reads the CSV from Step 2.
-
-    python3 langID_extract_TXT.py
-
-* **Input:** `output.csv` (from Step 2)
-* **Output:** `../PAGE_TXT/` (directory containing raw text files)
-
-#### 3.2 Classify Lines (GPU Bound)
+#### 4.1 Classify Lines (GPU Bound)
 This script reads the extracted text files, batches lines together, and runs the FastText 
 and DistilGPT2 models on the **GPU**. It logs results immediately to a raw CSV to save memory.
 
@@ -127,17 +127,17 @@ and DistilGPT2 models on the **GPU**. It logs results immediately to a raw CSV t
 `raw_lines_classified.csv>`: Page-level summary of line counts per category.
    - *Columns*:
       - `file` - document identifier
-      - `page` - page number
+      - `page_num` - page number
       - `line_num` - line number, starts from 1 for each line on the ALTO page
       - `text` - original text of the line from ALTO page
       - `lang` - predicted ISO language code of the line ([list of all possible language labels predicted by FastText model)](https://github.com/facebookresearch/flores/tree/main/flores200#languages-in-flores-200)
-      - `score` - confidence score of the predicted language code
-      - `ppl` - perplexity score of the original line text
-      - `cat` - assigned category of the line (**Clear**, **Noisy**, **Trash**, **Non-text**, or **Empty**)
+      - `lang_score` - confidence score of the predicted language code
+      - `perplex` - perplexity score of the original line text
+      - `categ` - assigned category of the line (**Clear**, **Noisy**, **Trash**, **Non-text**, or **Empty**)
    -   *Example*: [raw_lines_classified.csv](raw_lines_classified.csv) 📎
 
 
-#### 3.3 Aggregate Statistics (Memory Bound)
+#### 4.2 Aggregate Statistics (Memory Bound)
 This script processes the massive `raw_lines_classified.csv` in chunks to produce the 
 final page-level statistics and per-document splits (**CPU** can handle this).
 
@@ -157,97 +157,6 @@ final page-level statistics and per-document splits (**CPU** can handle this).
       - `Noisy` - noisy lines count, some errors but partially understandable
       - `Empty` - empty lines count, contain only whitespace
    -   *Example*: [final_page_stats.csv](final_page_stats.csv) 📎
-
-
-### ▶ Step 4: Extract NER and CONLL-U
-
-This stage performs advanced NLP analysis using external APIs (Lindat/CLARIAH-CZ) to generate Universal Dependencies (CoNLL-U) and Named Entity Recognition (NER) data.
-
-Unlike previous steps, this process is split into modular shell scripts to handle large-scale processing, text chunking, and API rate limiting.
-
-#### Configuration ⚙️
-
-Before running the pipeline, review the [api_config.env](api_config.env) 📎 file. This file controls directory paths, API endpoints, and model selection.
-```bash
-# Example settings in api_config.env
-INPUT_DIR="../PAGE_TXT"        # Source of text files (from Step 3.1)
-OUTPUT_DIR="../OUT_API"        # Destination for results
-MODEL_UDPIPE="czech-pdt-ud-2.15-241121"
-MODEL_NAMETAG="nametag3-czech-cnec2.0-240830"
-WORD_CHUNK_LIMIT=900           # Word limit per API call
-```
-
-#### Execution Pipeline
-
-Run the following scripts in sequence. Each script utilizes [api_common.sh](api_util/api_common.sh) 📎 for logging, retry logic, and error handling.
-
-##### I. Generate Manifest
-
-Maps input text files to document IDs and page numbers to ensure correct processing order.
-```bash
-./api_manifest.sh
-```
-
-* **Input:** `INPUT_DIR` (raw text files in subdirectories).
-* **Output:** `processing_work/manifest.tsv`.
-
-##### II. UDPipe Processing (Morphology & Syntax)
-
-Sends text to the UDPipe API. Large pages are automatically split into chunks (default 900 words) using 
-[chunk.py](api_util/chunk.py) 📎 to respect API limits, then merged back into valid CoNLL-U files.
-```bash
-./api_udp.sh
-```
-
-* **Output:** `processing_work/UDPIPE_INTERMEDIATE/*.conllu` (Intermediate CoNLL-U files).
-
-##### III. NameTag Processing (NER)
-
-Takes the valid CoNLL-U files and passes them through the NameTag API to annotate Named Entities 
-(NE) directly into the syntax trees.
-```bash
-./api_nt.sh
-```
-
-* **Output:** `OUTPUT_DIR/CONLLU_FINAL/` (Final annotated files).
-
-##### IV. Generate Statistics
-
-Aggregates the entity counts from the final CoNLL-U files into a summary CSV. It utilizes 
-[analyze.py](api_util/analyze.py) 📎 to map complex 
-CNEC 2.0 tags (e.g., `g`, `pf`, `if`) into human-readable categories (e.g., "Geographical name", "First name", "Company/Firm").
-
-```bash
-./api_stats.sh
-```
-
-* **Output:** `OUTPUT_DIR/STATS/summary_ne_counts.csv`.
-
-Example: [summary_ne_counts.csv](summary_ne_counts.csv) 📎.
-
-#### Output Structure
-
-After completing the pipeline, your output directory will be organized as follows:
-```
-processing_work/
-├── UDPIPE_INTERMEDIATE/  # Intermediate CONLL-U files
-│   ├── <doc_id>_part1.conllu
-│   ├── <doc_id>_part2.conllu
-│   └── ...
-├── nametag_response_docname1.conllu.json
-├── nametag_response_docname2.conllu.json
-├── ...
-└── manifest.tsv
-```
-AND
-```
-<OUTPUT_DIR>
-├── CONLLU_FINAL/           # Full linguistic analysis
-│   ├── <doc_id>.conllu     # Parsed sentences with NER tags
-│   └── ...
-└── STATS/
-    └── summary_ne_counts.csv  # Table of top entities per document
-```
 
 ### ▶ Step 5: Extract Keywords (KER) based on tf-idf
 

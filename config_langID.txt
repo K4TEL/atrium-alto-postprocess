@@ -1,8 +1,3 @@
-[EXTRACT]
-INPUT_CSV = alto_statistics.csv
-OUTPUT_TEXT_DIR = ../PAGE_TXT
-MAX_WORKERS = 16
-
 [CLASSIFY]
 INPUT_CSV = alto_statistics.csv
 TEXT_DIR = ../PAGE_TXT

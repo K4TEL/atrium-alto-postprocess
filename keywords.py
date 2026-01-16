@@ -21,7 +21,7 @@ except ImportError:
 ONEPAGER_DOC_REGEX = re.compile(r"(.*)[-_](\d+)$")
 
 # Default directory for individual CSV files
-DEFAULT_INDIVIDUAL_OUTPUT_DIR = "keywords_per_document"
+DEFAULT_INDIVIDUAL_OUTPUT_DIR = "KW_PER_DOC"
 
 
 def get_text_from_file(file_path: str) -> list[str]:
