@@ -120,9 +120,8 @@ and DistilGPT2 models on the **GPU**. It logs results immediately to a raw CSV t
     python3 langID_classify.py
 
 * **Input:** `../PAGE_TXT/` and `output.csv`
-* **Output:** `raw_lines_classified.csv` (append-only log of every line)
+* **Output:** `DOC_LINE_LANG_CLASS/` containing per-document CSVs (e.g., [DOC_LINE_LANG_CLASS](data_samples/DOC_LINE_LANG_CLASS)) like [raw_lines_classified.csv](raw_lines_classified.csv) 📎
 * **Note:** This script is resume-capable. If interrupted, run it again, and it will skip files already present in the log.
-
 
 `raw_lines_classified.csv>`: Page-level summary of line counts per category.
    - *Columns*:
@@ -138,12 +137,12 @@ and DistilGPT2 models on the **GPU**. It logs results immediately to a raw CSV t
 
 
 #### 4.2 Aggregate Statistics (Memory Bound)
-This script processes the massive `raw_lines_classified.csv` in chunks to produce the 
+This script processes the directory `DOC_LINE_LANG_CLASS` with CSV files in chunks to produce the 
 final page-level statistics and per-document splits (**CPU** can handle this).
 
     python3 langID_aggregate_STAT.py
 
-* **Input:** `raw_lines_classified.csv`
+* **Input:**  `DOC_LINE_LANG_CLASS` (directory with CSV files from previous step)
 * **Output 1:** `final_page_stats.csv` (The input CSV augmented with line counts: `clear_lines`, `noisy_lines`, etc.)
 * **Output 2:** `../PAGE_STAT/` (Folder containing per-document CSVs)
 
@@ -169,11 +168,21 @@ page-specific files `.txt`.
 -   `--lang`: Language for KER (`cs` for Czech or `en` for English).
 -   `--max-words`: Number of keywords to extract.
 
-This process creates `.csv` table `keywords_master.csv`
-
-The columns include `file`, and pairs of `keyword<N>` and `score<N>`.
+This process creates `.csv` table `keywords_master.csv` - the columns include `file`, and 
+pairs of `keyword<N>` and `score<N>`.
 
 An example of the summary is available in [keywords_master.csv](keywords_master.csv) 📎.
+
+Besides the summary table, individual per-document CSV files are also created in the specified output directory
+
+Example of per-document CSV file with keywords: [KW_PER_DOC](data_samples/KW_PER_DOC) 📎.
+
+
+     KW_PER_DOC/
+          ├── <docname1>.csv 
+          ├── <docname2>.csv
+          └── ...
+
 
 ---
 
