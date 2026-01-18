@@ -52,14 +52,16 @@ Each page-specific file retains the header from its original source document.
 
 Example of the output directory with divided per-page XML files: [PAGE_ALTO](data_samples/PAGE_ALTO) 📁.
 
-    PAGE_ALTO/
-    ├── <file1>
-        ├── <file1>-<page>.alto.xml 
-        └── ...
-    ├── <file2>
-        ├── <file2>-<page>.alto.xml 
-        └── ...
-    └── ...
+```
+PAGE_ALTO/
+├── <file1>
+│   ├── <file1>-<page>.alto.xml 
+│   └── ...
+├── <file2>
+│   ├── <file2>-<page>.alto.xml
+│   └── ...
+└── ...
+```
 
 ### ▶ Step 2: Create Page Statistics Table
 
@@ -91,21 +93,21 @@ It reads the CSV from Step 2.
 
     python3 extract_ALTO_2_TXT.py
 
-* **Input:** `output.csv` (from Step 2)
-* **Input:** `../PAGE_ALTO/` (input directory with ALTO XML files split into pages from Step 1)
+* **Input 1:** `output.csv` (from Step 2)
+* **Input 2:** `../PAGE_ALTO/` (input directory with ALTO XML files split into pages from Step 1)
 * **Output:** `../PAGE_TXT/` (directory containing raw text files)
 
 Example of per-page text files: [PAGE_TXT](data_samples/PAGE_TXT) 📁.
-
-    PAGE_TXT/
-    ├── <file1>
-        ├── <file1>-<page>.txt 
-        └── ...
-    ├── <file2>
-        ├── <file2>-<page>.txt 
-        └── ...
-    └── ...
-
+```
+PAGE_TXT/
+├── <file1>
+│   ├── <file1>-<page>.txt 
+│   └── ...
+├── <file2>
+│   ├── <file2>-<page>.txt 
+│   └── ...
+└── ...
+```
 ### ▶ Step 4: Classify Page Text Quality & Language
 
 This is a key ⌛ time-consuming step that analyzes the text quality of each page, 
@@ -115,8 +117,8 @@ It uses the [FastText language identification model](https://huggingface.co/face
 and perplexity scores from [distilGPT2](https://huggingface.co/distilbert/distilgpt2) 😊 to detect noise.
 
 More post-processing of TXT files can be found in the [GitHub repository](https://github.com/K4TEL/atrium-nlp-enrich.git) 
-of ATRIUM project dedicated to based on
-NLP enrichment of the textual data using Nametag for NER and UDPipe for CONLL-U files with lemmas & POS tags.
+of ATRIUM project dedicated to based on NLP enrichment of the textual data using Nametag for 
+NER and UDPipe for CONLL-U files with lemmas & POS tags.
 
 As the script processes, it aggregates line counts for each page into categories 🪧:
 
@@ -140,8 +142,8 @@ and DistilGPT2 models on the **GPU**. It logs results immediately to a raw CSV t
 
     python3 langID_classify.py
 
-* **Input:** `../PAGE_TXT/` from Step 3
-* **Input:** `output.csv` from Step 2
+* **Input 1:** `../PAGE_TXT/` from Step 3
+* **Input 2:** `output.csv` from Step 2
 * **Output:** `DOC_LINE_LANG_CLASS/` containing per-document CSVs (e.g., [DOC_LINE_LANG_CLASS](data_samples/DOC_LINE_LANG_CLASS) 📁) 
 * **Note:** This script is resume-capable. If interrupted, run it again, and it will skip files already present in the log.
 
@@ -157,12 +159,12 @@ and DistilGPT2 models on the **GPU**. It logs results immediately to a raw CSV t
       - `categ` - assigned category of the line (**Clear**, **Noisy**, **Trash**, **Non-text**, or **Empty**)
 
 Example of per-document CSV file with per-line statistics: [DOC_LINE_LANG_CLASS](data_samples/DOC_LINE_LANG_CLASS) 📁.
-
-     DOC_LINE_LANG_CLASS/
-     ├── <docname1>.csv 
-     ├── <docname2>.csv
-     └── ...
-
+```
+DOC_LINE_LANG_CLASS/
+├── <docname1>.csv 
+├── <docname2>.csv
+└── ...
+```
 #### 4.2 Aggregate Statistics (Memory Bound)
 This script processes the directory `DOC_LINE_LANG_CLASS` with CSV files in chunks to produce the 
 final page-level statistics and per-document splits (**CPU** can handle this).
@@ -185,12 +187,12 @@ final page-level statistics and per-document splits (**CPU** can handle this).
    -   *Example*: [final_page_stats.csv](final_page_stats.csv) 📎
 
 Example of per-document CSV file with per-page statistics of line type counts: [DOC_LINE_STAT](data_samples/DOC_LINE_STAT) 📁.
-
-     DOC_LINE_STAT/
-     ├── stats_<docname1>.csv 
-     ├── stats_<docname2>.csv
-     └── ...
-
+```
+DOC_LINE_STAT/
+├── stats_<docname1>.csv 
+├── stats_<docname2>.csv
+└── ...
+```
 ### ▶ Step 5: Extract Keywords (KER) based on tf-idf
 
 Finally, you can extract keywords 🔎 from your processed text. This script runs on a directory of subdirectories with
@@ -203,19 +205,21 @@ page-specific files `.txt`.
 -   `--max-words`: Number of keywords to extract.
 
 This process creates `.csv` table `keywords_master.csv` - the columns include `file`, and 
-pairs of `keyword<N>` and `score<N>`.
+pairs of `keyword<N>` and `score<N>`. An example of the summary is available in [keywords_master.csv](keywords_master.csv) 📎.
 
-An example of the summary is available in [keywords_master.csv](keywords_master.csv) 📎.
+* **Input:** `../PAGE_TXT/` (directory with page-specific text files from Step 3)
+* **Output 1:** `keywords_master.csv` (summary table with keywords per document)
+* **Output 2:** `KW_PER_DOC/` (directory with per-document CSV files
 
-Besides the summary table, individual per-document CSV files are also created in the specified output directory
-
+Besides the summary table, individual per-document CSV files are also created in the specified output directory.
 Example of per-document CSV file with keywords: [KW_PER_DOC](data_samples/KW_PER_DOC) 📁.
 
-     KW_PER_DOC/
-     ├── <docname1>.csv 
-     ├── <docname2>.csv
-     └── ...
-
+```
+KW_PER_DOC/
+├── <docname1>.csv 
+├── <docname2>.csv
+└── ...
+```
 ---
 
 ## Acknowledgements 🙏
