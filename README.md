@@ -2,8 +2,7 @@
 
 This project provides a complete workflow for processing ALTO XML files. It takes raw ALTO 
 XMLs and transforms them into structured statistics tables, performs text classification, 
-filters low-quality OCR results, and extracts high-level linguistic features like 
-Named Entities (NER), CONLL-U files with lemmas & part-of-sentence tags, and keywords (KER).
+filters low-quality OCR results, and extract keywords (KER).
 
 The core of the quality filtering relies on language identification and perplexity measures 
 to identify and categorize noisy or unreliable OCR output.
@@ -128,9 +127,9 @@ As the script processes, it aggregates line counts for each page into categories
 -   **Empty** - Line contains only whitespace.
 
 > [!NOTE]
-> This script generates two primary output tables (results are saved every 25 pages) 
-> `raw_lines_classified.csv` and `final_page_stats.csv`, while the
-> raw text files and per-document results are also saved in `../PAGE-TXT/` and `../PAGE-STAT/`.
+> This script generates two primary output directories: 
+> `DOC_LINE_LANG_CLASS/` and `DOC_LINE_STATS/`, while the
+> raw text files (primary input) are stored in `../PAGE-TXT/`generated from `../PAGE_ALTO`.
 
 All of the input-output files and chamgable parameters are available in [config_langID.txt](config_langID.txt) 📎 where 
 here Step 3 is split into three stages:
@@ -143,10 +142,10 @@ and DistilGPT2 models on the **GPU**. It logs results immediately to a raw CSV t
 
 * **Input:** `../PAGE_TXT/` from Step 3
 * **Input:** `output.csv` from Step 2
-* **Output:** `DOC_LINE_LANG_CLASS/` containing per-document CSVs (e.g., [DOC_LINE_LANG_CLASS](data_samples/DOC_LINE_LANG_CLASS) 📁) like [raw_lines_classified.csv](raw_lines_classified.csv) 📎
+* **Output:** `DOC_LINE_LANG_CLASS/` containing per-document CSVs (e.g., [DOC_LINE_LANG_CLASS](data_samples/DOC_LINE_LANG_CLASS) 📁) 
 * **Note:** This script is resume-capable. If interrupted, run it again, and it will skip files already present in the log.
 
-`raw_lines_classified.csv>`: Page-level summary of line counts per category.
+`<doc_name>.csv`: Page-level summary of line counts per category.
    - *Columns*:
       - `file` - document identifier
       - `page_num` - page number
@@ -156,7 +155,6 @@ and DistilGPT2 models on the **GPU**. It logs results immediately to a raw CSV t
       - `lang_score` - confidence score of the predicted language code
       - `perplex` - perplexity score of the original line text
       - `categ` - assigned category of the line (**Clear**, **Noisy**, **Trash**, **Non-text**, or **Empty**)
-   -   *Example*: [raw_lines_classified.csv](raw_lines_classified.csv) 📎
 
 Example of per-document CSV file with per-line statistics: [DOC_LINE_LANG_CLASS](data_samples/DOC_LINE_LANG_CLASS) 📁.
 
@@ -173,7 +171,7 @@ final page-level statistics and per-document splits (**CPU** can handle this).
 
 * **Input:**  `DOC_LINE_LANG_CLASS` (directory with CSV files from previous step)
 * **Output 1:** `final_page_stats.csv` (The input CSV augmented with line counts: `clear_lines`, `noisy_lines`, etc.)
-* **Output 2:** `../PAGE_STAT/` (Folder containing per-document CSVs)
+* **Output 2:** `../DOC_LINE_STAT/` (Folder containing per-document CSVs)
 
 `final_page_stats.csv`: Detailed classification results for *every single line*.
    - *Columns*:
@@ -186,9 +184,9 @@ final page-level statistics and per-document splits (**CPU** can handle this).
       - `Empty` - empty lines count, contain only whitespace
    -   *Example*: [final_page_stats.csv](final_page_stats.csv) 📎
 
-Example of per-document CSV file with per-page statistics: [PAGE_STAT](data_samples/PAGE_STAT) 📁.
+Example of per-document CSV file with per-page statistics of line type counts: [DOC_LINE_STAT](data_samples/DOC_LINE_STAT) 📁.
 
-     PAGE_STAT/
+     DOC_LINE_STAT/
      ├── stats_<docname1>.csv 
      ├── stats_<docname2>.csv
      └── ...
