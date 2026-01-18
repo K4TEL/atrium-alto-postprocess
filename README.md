@@ -63,6 +63,8 @@ PAGE_ALTO/
 └── ...
 ```
 
+---
+
 ### ▶ Step 2: Create Page Statistics Table
 
 Next, use the output directory from Step 1 as the input for this script to generate a 
@@ -82,9 +84,11 @@ The extraction is powered by the [alto-tools](https://github.com/cneud/alto-tool
 * **Input:** `../PAGE_ALTO/` (input directory with ALTO XML files split into pages from Step 1)
 * **Output:** `output.csv` (table with page-level statistics and paths to ALTO files)
 
-> [!NOTE]
+> [!IMPORTANT]
 > This statistics table is the basis for subsequent processing steps.
 > An example is available in [test_alto_stats.csv](test_alto_stats.csv) 📎.
+
+---
 
 ### ▶ Step 3: Extract text from ALTO XML
 
@@ -108,6 +112,8 @@ PAGE_TXT/
 │   └── ...
 └── ...
 ```
+---
+
 ### ▶ Step 4: Classify Page Text Quality & Language
 
 This is a key ⌛ time-consuming step that analyzes the text quality of each page, 
@@ -145,18 +151,20 @@ and DistilGPT2 models on the **GPU**. It logs results immediately to a raw CSV t
 * **Input 1:** `../PAGE_TXT/` from Step 3
 * **Input 2:** `output.csv` from Step 2
 * **Output:** `DOC_LINE_LANG_CLASS/` containing per-document CSVs (e.g., [DOC_LINE_LANG_CLASS](data_samples/DOC_LINE_LANG_CLASS) 📁) 
-* **Note:** This script is resume-capable. If interrupted, run it again, and it will skip files already present in the log.
 
-`<doc_name>.csv`: Page-level summary of line counts per category.
-   - *Columns*:
-      - `file` - document identifier
-      - `page_num` - page number
-      - `line_num` - line number, starts from 1 for each line on the ALTO page
-      - `text` - original text of the line from ALTO page
-      - `lang` - predicted ISO language code of the line ([list of all possible language labels predicted by FastText model)](https://github.com/facebookresearch/flores/tree/main/flores200#languages-in-flores-200)
-      - `lang_score` - confidence score of the predicted language code
-      - `perplex` - perplexity score of the original line text
-      - `categ` - assigned category of the line (**Clear**, **Noisy**, **Trash**, **Non-text**, or **Empty**)
+ 
+> [!TIP]
+> This script is resume-capable. If interrupted, run it again, and it will skip files already present in the output directory.
+
+`<doc_name>.csv`: Detailed classification results for *every single line* within a document, with columns:
+ - `file` - document identifier
+ - `page_num` - page number
+ - `line_num` - line number, starts from 1 for each line on the ALTO page
+ - `text` - original text of the line from ALTO page
+ - `lang` - predicted ISO language code of the line ([list of all possible language labels predicted by FastText model)](https://github.com/facebookresearch/flores/tree/main/flores200#languages-in-flores-200)
+ - `lang_score` - confidence score of the predicted language code
+ - `perplex` - perplexity score of the original line text
+ - `categ` - assigned category of the line (**Clear**, **Noisy**, **Trash**, **Non-text**, or **Empty**)
 
 Example of per-document CSV file with per-line statistics: [DOC_LINE_LANG_CLASS](data_samples/DOC_LINE_LANG_CLASS) 📁.
 ```
@@ -166,25 +174,26 @@ DOC_LINE_LANG_CLASS/
 └── ...
 ```
 #### 4.2 Aggregate Statistics (Memory Bound)
-This script processes the directory `DOC_LINE_LANG_CLASS` with CSV files in chunks to produce the 
+This script processes the directory `DOC_LINE_LANG_CLASS/` with CSV files in chunks to produce the 
 final page-level statistics and per-document splits (**CPU** can handle this).
 
     python3 langID_aggregate_STAT.py
 
-* **Input:**  `DOC_LINE_LANG_CLASS` (directory with CSV files from previous step)
+* **Input:**  `DOC_LINE_LANG_CLASS/` (directory with CSV files from previous step)
 * **Output 1:** `final_page_stats.csv` (The input CSV augmented with line counts: `clear_lines`, `noisy_lines`, etc.)
 * **Output 2:** `../DOC_LINE_STAT/` (Folder containing per-document CSVs)
 
-`final_page_stats.csv`: Detailed classification results for *every single line*.
-   - *Columns*:
-      - `file` - document identifier
-      - `page` - page number
-      - `Clear` - clear lines count, clean and ready to be processed
-      - `Non-text` - non-text lines count, contain mostly digits/symbols
-      - `Trash` - trash lines count, unintelligible or very high perplexity (due to OCR errors)
-      - `Noisy` - noisy lines count, some errors but partially understandable
-      - `Empty` - empty lines count, contain only whitespace
-   -   *Example*: [final_page_stats.csv](final_page_stats.csv) 📎
+`final_page_stats.csv`: Page-level summary of line counts per text category
+- *Example*: [final_page_stats.csv](final_page_stats.csv) 📎
+- *Columns*:
+   - `file` - document identifier
+   - `page` - page number
+   - `Clear` - clear lines **count**, clean and ready to be processed
+   - `Non-text` - non-text lines **count**, contain mostly digits/symbols
+   - `Trash` - trash lines **count**, unintelligible or very high perplexity (due to OCR errors)
+   - `Noisy` - noisy lines **count**, some errors but partially understandable
+   - `Empty` - empty lines **count**, contain only whitespace
+   
 
 Example of per-document CSV file with per-page statistics of line type counts: [DOC_LINE_STAT](data_samples/DOC_LINE_STAT) 📁.
 ```
@@ -193,25 +202,35 @@ DOC_LINE_STAT/
 ├── stats_<docname2>.csv
 └── ...
 ```
+
+---
+
 ### ▶ Step 5: Extract Keywords (KER) based on tf-idf
 
 Finally, you can extract keywords 🔎 from your processed text. This script runs on a directory of subdirectories with
 page-specific files `.txt`.
 
-    python3 keywords.py -i <input_dir> -l <lang> --max-words <integer> 
+    python3 keywords.py -i <input_dir> -l <lang> -w <integer> -n <integer> -d <output_dir> -o <output_file>.csv
 
--   `--input_dir`: Input directory (e.g., your output from Step 1 or text files from Step 3).
+where short flag meanings are (listed in the same order as used above):
+
+-   `--input_dir`: Input directory (e.g., text files from Step 3).
 -   `--lang`: Language for KER (`cs` for Czech or `en` for English).
--   `--max-words`: Number of keywords to extract.
+-   `--max-words`: Number words per keyword entry.
+-   `--num_keywords`: Number of keywords to extract.
+-  `--per_doc_out_dir`: Output directory for per-document CSV files (default: `KW_PER_DOC`).
+-  `--output_file`: Output CSV file for the master keywords table (default: `keywords_master.csv`).
 
-This process creates `.csv` table `keywords_master.csv` - the columns include `file`, and 
-pairs of `keyword<N>` and `score<N>`. An example of the summary is available in [keywords_master.csv](keywords_master.csv) 📎.
+> [!WARNING]
+> Make sure KER data (tf-idf table per language) is stored in [ker_data](ker_data) 📁 before running this script.
 
 * **Input:** `../PAGE_TXT/` (directory with page-specific text files from Step 3)
 * **Output 1:** `keywords_master.csv` (summary table with keywords per document)
 * **Output 2:** `KW_PER_DOC/` (directory with per-document CSV files
 
-Besides the summary table, individual per-document CSV files are also created in the specified output directory.
+This process creates `.csv` table `keywords_master.csv` - the columns include `file`, and 
+pairs of `keyword<N>` and `score<N>`. An example of the summary is available in [keywords_master.csv](keywords_master.csv) 📎.
+
 Example of per-document CSV file with keywords: [KW_PER_DOC](data_samples/KW_PER_DOC) 📁.
 
 ```
@@ -220,6 +239,19 @@ KW_PER_DOC/
 ├── <docname2>.csv
 └── ...
 ```
+
+Where each file contains **keyword** plus its **score** in two columns sorted by the score in **descending order**.
+
+| Score Range | Semantic Category     | Mathematical Driver | Interpretation                                |
+|-------------|-----------------------|---------------------|-----------------------------------------------|
+| 0.0         | The **Void**          | IDF ≈ 0             | Stopwords or ubiquitous terms.                |
+| 0.0-0.2     | The **Noise** Floor   | Low TF × Low IDF    | Common words with low local relevance.        |
+| 0.2-1.0     | The **Context** Layer | Mod. TF × Low IDF   | General vocabulary defining the broad topic.  |
+| 1.0-5.0     | The **Topic** Layer   | High TF × Mod. IDF  | Specific nouns and verbs central to the text. |
+| > 5.0       | The **Entity** Layer  | High TF × High IDF  | Rare terms, Neologisms, Named Entities.       |
+
+The table above specifies how to interpret keyword scores based on their TF-IDF values returned by the KER algorithm.
+
 ---
 
 ## Acknowledgements 🙏
