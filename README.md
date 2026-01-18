@@ -139,8 +139,8 @@ As the script processes, it aggregates line counts for each page into categories
 > `DOC_LINE_LANG_CLASS/` and `DOC_LINE_STATS/`, while the
 > raw text files (primary input) are stored in `../PAGE-TXT/`generated from `../PAGE_ALTO`.
 
-All of the input-output files and chamgable parameters are available in [config_langID.txt](config_langID.txt) 📎 where 
-here Step 3 is split into three stages:
+All of the input-output files and changeable parameters are available in [config_langID.txt](config_langID.txt) 📎 where
+variables are divided into two sections according to the processing stage of Step 4 (classification or aggregation).
 
 #### 4.1 Classify Lines (GPU Bound)
 This script reads the extracted text files, batches lines together, and runs the FastText 
@@ -152,9 +152,8 @@ and DistilGPT2 models on the **GPU**. It logs results immediately to a raw CSV t
 * **Input 2:** `output.csv` from Step 2
 * **Output:** `DOC_LINE_LANG_CLASS/` containing per-document CSVs (e.g., [DOC_LINE_LANG_CLASS](data_samples/DOC_LINE_LANG_CLASS) 📁) 
 
- 
 > [!TIP]
-> This script is resume-capable. If interrupted, run it again, and it will skip files already present in the output directory.
+> This script is resume-capable. If interrupted, run it again, and already present in the output directory files will be skipped.
 
 `<doc_name>.csv`: Detailed classification results for *every single line* within a document, with columns:
  - `file` - document identifier
@@ -202,13 +201,18 @@ DOC_LINE_STAT/
 ├── stats_<docname2>.csv
 └── ...
 ```
+This is the end of the text quality classification and filtering step. You can now use the `final_page_stats.csv` to
+find files that need another round of OCR or manual correction based on the line type counts. The files with the 
+majority of clean lines can be marked for further processing based on text. It is also possible to guess handwritten 
+files by the absence of clear text lines or majority of trash lines, these files can be excluded from further processing
+before the Handwritten Text Recognition (HTR) processing is applied.
 
 ---
 
 ### ▶ Step 5: Extract Keywords (KER) based on tf-idf
 
-Finally, you can extract keywords 🔎 from your processed text. This script runs on a directory of subdirectories with
-page-specific files `.txt`.
+Finally, you can extract keywords 🔎 from your text. This script runs on a directory of subdirectories with
+page-specific files `.txt` (e.g., `../PAGE_TXT/`).
 
     python3 keywords.py -i <input_dir> -l <lang> -w <integer> -n <integer> -d <output_dir> -o <output_file>.csv
 
@@ -228,8 +232,8 @@ where short flag meanings are (listed in the same order as used above):
 * **Output 1:** `keywords_master.csv` (summary table with keywords per document)
 * **Output 2:** `KW_PER_DOC/` (directory with per-document CSV files
 
-This process creates `.csv` table `keywords_master.csv` - the columns include `file`, and 
-pairs of `keyword<N>` and `score<N>`. An example of the summary is available in [keywords_master.csv](keywords_master.csv) 📎.
+This process creates `.csv` table with the columns like `file`, and pairs of `kw-<N>` (N-th keyword)) 
+and `score-<N>` (N-th keyword's score). An example of the summary is available in [keywords_master.csv](keywords_master.csv) 📎.
 
 Example of per-document CSV file with keywords: [KW_PER_DOC](data_samples/KW_PER_DOC) 📁.
 
@@ -250,7 +254,8 @@ Where each file contains **keyword** plus its **score** in two columns sorted by
 | 1.0-5.0     | The **Topic** Layer   | High TF × Mod. IDF  | Specific nouns and verbs central to the text. |
 | > 5.0       | The **Entity** Layer  | High TF × High IDF  | Rare terms, Neologisms, Named Entities.       |
 
-The table above specifies how to interpret keyword scores based on their TF-IDF values returned by the KER algorithm.
+The table above specifies how to interpret keyword scores returned by the KER algorithm based on their 
+TF-IDF values computed inside the system.
 
 ---
 
