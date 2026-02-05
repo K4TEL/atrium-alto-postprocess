@@ -42,8 +42,8 @@ COMMON_LANGS = ["ces", "deu", "eng"]  # Languages considered "common"
 # Perplexity measures how well a model "predicts" a text.
 # Lower perplexity = more "normal" or "expected" text.
 # Higher perplexity = more "surprising" or "abnormal" text (e.g., OCR errors, non-text).
-PERPLEXITY_THRESHOLD_MAX = 500  # Perplexity >= this -> likely "Trash"
-PERPLEXITY_THRESHOLD_MIN = 100  # Perplexity >= this -> likely "Noisy"
+PERPLEXITY_THRESHOLD_MAX = 1500  # Perplexity >= this -> likely "Trash"
+PERPLEXITY_THRESHOLD_MIN = 5000  # Perplexity >= this -> likely "Noisy"
 
 # Language Score Thresholds
 # fastText language identification returns a score between 0 and 1.

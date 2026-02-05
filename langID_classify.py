@@ -146,7 +146,9 @@ def process_and_write_batch(lines, meta, out_dir, ft, ppl_model, tokenizer):
     ppls = calculate_perplexity_batch(lines, ppl_model, tokenizer, DEVICE)
 
     # 2. FastText
-    labels, scores = ft.predict(lines, k=1)
+    lines_lower = [line.lower() for line in lines]
+    labels, scores = ft.predict(lines_lower, k=1)
+    # labels, scores = ft.predict(lines, k=1)
     langs = [l[0].replace("__label__", "") for l in labels]
     scores = [s[0] for s in scores]
 

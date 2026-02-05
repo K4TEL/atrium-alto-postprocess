@@ -154,32 +154,43 @@ def normalize_boxes(boxes, width, height):
 
 def get_vertical_overlap(box1, box2):
     """Calculates the vertical intersection ratio between two boxes."""
-    y1_a, y2_a = box1[1], box1[3]
-    y1_b, y2_b = box2[1], box2[3]
+    y1_max = max(box1[1], box2[1])
+    y2_min = min(box1[3], box2[3])
+    intersection = max(0, y2_min - y1_max)
 
-    intersection = max(0, min(y2_a, y2_b) - max(y1_a, y1_b))
-    min_height = min(y2_a - y1_a, y2_b - y1_b)
+    height1 = box1[3] - box1[1]
+    height2 = box2[3] - box2[1]
+    min_height = min(height1, height2)
 
-    if min_height <= 0:
-        return 0.0
-
+    if min_height == 0: return 0
     return intersection / min_height
 
 
+import numpy as np
+
+
 def post_process_text(ordered_words, ordered_boxes):
-    """Reconstructs text from reordered words/boxes."""
+    """Reconstructs text from reordered words/boxes with robust paragraph detection."""
     if not ordered_words:
         return ""
 
+    # 1. Calculate Median Height Robustly
     if ordered_boxes:
         heights = [(b[3] - b[1]) for b in ordered_boxes]
-        valid_heights = [h for h in heights if h > 0]
+        # Filter out very small boxes (e.g., commas, periods) that might skew median down
+        valid_heights = [h for h in heights if h > 5]
+        if not valid_heights: valid_heights = heights  # Fallback
         median_height = np.median(valid_heights) if valid_heights else 10
     else:
         median_height = 10
 
+    # 2. Adjust Thresholds
     OVERLAP_THRESHOLD = 0.4
-    PARAGRAPH_GAP_THRESHOLD = median_height * 1.8
+
+    # Increased from 1.8 to 2.5.
+    # Standard line spacing is usually 1.2-1.5x text height.
+    # Paragraph gaps are usually significantly larger.
+    PARAGRAPH_GAP_THRESHOLD = median_height * 2.5
 
     result_tokens = []
     prev_box = None
@@ -192,39 +203,51 @@ def post_process_text(ordered_words, ordered_boxes):
         else:
             curr_top = box[1]
             prev_bottom = prev_box[3]
+
+            # Check for horizontal overlap (same line)
             overlap_ratio = get_vertical_overlap(prev_box, box)
 
             if overlap_ratio > OVERLAP_THRESHOLD:
                 separator = " "
             else:
+                # Calculate vertical gap
                 vertical_gap = curr_top - prev_bottom
-                if vertical_gap < -1.0 * median_height:
+
+                # Logic for line splits
+                # Case A: Column break or layout reset (gap is negative or very large negative)
+                if vertical_gap < -0.5 * median_height:
                     separator = "\n\n"
+
+                # Case B: Paragraph Break (gap is significantly larger than line height)
                 elif vertical_gap > PARAGRAPH_GAP_THRESHOLD:
                     separator = "\n\n"
+
+                # Case C: Standard Line Break
                 else:
                     separator = "\n"
 
+        # 3. Token Append Logic (Cleaned up for clarity)
         if separator == "\n\n":
-            if result_tokens and result_tokens[-1] == " ": result_tokens.pop()
-            if result_tokens and result_tokens[-1] == "\n":
-                result_tokens.append("\n")
-            else:
-                result_tokens.append("\n\n")
+            # Strip trailing spaces/newlines before adding double newline
+            while result_tokens and result_tokens[-1] in [" ", "\n"]:
+                result_tokens.pop()
+            result_tokens.append("\n\n")
+
         elif separator == "\n":
-            if result_tokens and result_tokens[-1] == " ": result_tokens.pop()
+            while result_tokens and result_tokens[-1] in [" ", "\n"]:
+                result_tokens.pop()
             result_tokens.append("\n")
+
         elif separator == " ":
-            if result_tokens and result_tokens[-1] not in ["\n", " "]:
+            # Only add space if previous token wasn't a separator
+            if result_tokens and result_tokens[-1] not in ["\n", "\n\n", " "]:
                 result_tokens.append(" ")
 
         result_tokens.append(word)
         prev_box = box
 
     final_text = "".join(result_tokens)
-    final_text = final_text.replace("\n\n\n", "\n\n").strip()
-
-    return final_text
+    return final_text.strip()
 
 
 def extract_single_page(args):
