@@ -2,7 +2,7 @@
 
 This project provides a complete workflow for processing ALTO XML files. It takes raw ALTO 
 XMLs and transforms them into structured statistics tables, performs text classification, 
-filters low-quality OCR results, and extract keywords (KER).
+filters low-quality OCR results.
 
 The core of the quality filtering relies on language identification and perplexity measures 
 to identify and categorize noisy or unreliable OCR output.
@@ -209,55 +209,6 @@ before the Handwritten Text Recognition (HTR) processing is applied.
 
 ---
 
-### ▶ Step 5: Extract Keywords (KER) based on tf-idf
-
-Finally, you can extract keywords 🔎 from your text. This script runs on a directory of subdirectories with
-page-specific files `.txt` (e.g., `../PAGE_TXT/`).
-
-    python3 keywords.py -i <input_dir> -l <lang> -w <integer> -n <integer> -d <output_dir> -o <output_file>.csv
-
-where short flag meanings are (listed in the same order as used above):
-
--   `--input_dir`: Input directory (e.g., text files from Step 3).
--   `--lang`: Language for KER (`cs` for Czech or `en` for English).
--   `--max-words`: Number words per keyword entry.
--   `--num_keywords`: Number of keywords to extract.
--  `--per_doc_out_dir`: Output directory for per-document CSV files (default: `KW_PER_DOC`).
--  `--output_file`: Output CSV file for the master keywords table (default: `keywords_master.csv`).
-
-> [!WARNING]
-> Make sure KER data (tf-idf table per language) is stored in [ker_data](ker_data) 📁 before running this script.
-
-* **Input:** `../PAGE_TXT/` (directory with page-specific text files from Step 3)
-* **Output 1:** `keywords_master.csv` (summary table with keywords per document)
-* **Output 2:** `KW_PER_DOC/` (directory with per-document CSV files
-
-This process creates `.csv` table with the columns like `file`, and pairs of `kw-<N>` (N-th keyword)) 
-and `score-<N>` (N-th keyword's score). An example of the summary is available in [keywords_master.csv](keywords_master.csv) 📎.
-
-Example of per-document CSV file with keywords: [KW_PER_DOC](data_samples/KW_PER_DOC) 📁.
-
-```
-KW_PER_DOC/
-├── <docname1>.csv 
-├── <docname2>.csv
-└── ...
-```
-
-Where each file contains **keyword** plus its **score** in two columns sorted by the score in **descending order**.
-
-| Score Range | Semantic Category     | Mathematical Driver | Interpretation                                |
-|-------------|-----------------------|---------------------|-----------------------------------------------|
-| 0.0         | The **Void**          | IDF ≈ 0             | Stopwords or ubiquitous terms.                |
-| 0.0-0.2     | The **Noise** Floor   | Low TF × Low IDF    | Common words with low local relevance.        |
-| 0.2-1.0     | The **Context** Layer | Mod. TF × Low IDF   | General vocabulary defining the broad topic.  |
-| 1.0-5.0     | The **Topic** Layer   | High TF × Mod. IDF  | Specific nouns and verbs central to the text. |
-| > 5.0       | The **Entity** Layer  | High TF × High IDF  | Rare terms, Neologisms, Named Entities.       |
-
-The table above specifies how to interpret keyword scores returned by the KER algorithm based on their 
-TF-IDF values computed inside the system.
-
----
 
 ## Acknowledgements 🙏
 
